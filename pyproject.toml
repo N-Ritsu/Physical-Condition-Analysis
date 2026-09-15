@@ -1,0 +1,16 @@
+[project]
+name = "it-school-health-manager"
+version = "0.1.0"
+description = "就労移行支援向け 体調・睡眠分析ダッシュボード"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

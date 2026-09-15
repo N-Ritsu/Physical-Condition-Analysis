@@ -216,3 +216,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# 個人の健康データ（機密情報のためリポジトリに含めない）
+data/*.xlsx
+data/*.xls
+data/*.csv
+!data/.gitkeep
+*Zone.Identifier
+~$*.xlsx
+
+# Claude Code のローカル実行設定（個人のPC固有の絶対パスを含むため共有しない）
+.claude/launch.json
