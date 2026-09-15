@@ -1,0 +1,220 @@
+"""就労移行支援向け 体調・睡眠分析ダッシュボード（Streamlitエントリーポイント）。
+
+すべての処理はローカルPC内で完結する（データの外部送信は一切行わない）。
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent / "src"))
+
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+
+from health_dashboard.data_loader import (
+    AXIS_OPTIONS,
+    CONDITION_BAD_THRESHOLD,
+    attach_condition,
+    filter_by_period,
+    load_daily_reports,
+    load_selfcare_points,
+)
+from health_dashboard.formatting import format_clock
+from health_dashboard.llm_insight import DEFAULT_MODEL, LLMUnavailableError, generate_insight
+from health_dashboard.rule_based_insight import generate_rule_based_insight
+from health_dashboard.stats import summarize
+
+DEFAULT_DATA_PATH = Path(__file__).parent / "data" / "日報データ.xlsx"
+DEFAULT_SELFCARE_PATH = Path(__file__).parent / "data" / "オリジナルセルフケアシート .xlsx"
+PERIOD_OPTIONS = ["直近1週間", "直近1ヶ月", "全期間"]
+
+# マーカー（○/△/×）はセルフケアシート由来の体調ポイントを表す（睡眠の質ではない）。
+_CONDITION_STYLE = {
+    "良好": {"symbol": "circle", "color": "#2e7d32", "label": "○ 良い"},
+    "普通": {"symbol": "triangle-up", "color": "#f9a825", "label": "△ 普通"},
+    "悪い": {"symbol": "x", "color": "#c62828", "label": "× 悪い"},
+}
+_CONDITION_DEFAULT_STYLE = {"symbol": "circle-open", "color": "#9e9e9e", "label": "記載なし"}
+
+_QUALITY_SCORE_TICKS = {1: "悪い", 2: "普通", 3: "良好"}
+
+
+def _apply_time_axis_ticks(fig: go.Figure, values: list[float]) -> None:
+    valid = [v for v in values if v is not None]
+    if not valid:
+        return
+    lo, hi = min(valid), max(valid)
+    step = 1 if (hi - lo) <= 14 else 2
+    start = int(lo) - (int(lo) % step)
+    tickvals = list(range(start, int(hi) + step + 1, step))
+    ticktext = [format_clock(v) for v in tickvals]
+    fig.update_yaxes(tickmode="array", tickvals=tickvals, ticktext=ticktext)
+
+
+@st.cache_data
+def _load_data(path_str: str, mtime: float):
+    return load_daily_reports(path_str)
+
+
+@st.cache_data
+def _load_selfcare(path_str: str, mtime: float):
+    return load_selfcare_points(path_str)
+
+
+def load_source_dataframe():
+    if DEFAULT_DATA_PATH.exists():
+        df = _load_data(str(DEFAULT_DATA_PATH), DEFAULT_DATA_PATH.stat().st_mtime)
+    else:
+        st.warning(
+            f"既定のデータファイルが見つかりません: {DEFAULT_DATA_PATH}\n"
+            "日報データ（Excel）をアップロードしてください。"
+        )
+        uploaded = st.file_uploader("日報データ（.xlsx）", type=["xlsx"])
+        if uploaded is None:
+            st.stop()
+        tmp_path = Path(st.session_state.setdefault("_tmp_dir", ".streamlit_uploads"))
+        tmp_path.mkdir(exist_ok=True)
+        saved = tmp_path / uploaded.name
+        saved.write_bytes(uploaded.getbuffer())
+        df = _load_data(str(saved), saved.stat().st_mtime)
+
+    if DEFAULT_SELFCARE_PATH.exists():
+        selfcare_df = _load_selfcare(
+            str(DEFAULT_SELFCARE_PATH), DEFAULT_SELFCARE_PATH.stat().st_mtime
+        )
+        df = attach_condition(df, selfcare_df)
+    else:
+        st.info(
+            f"セルフケアシートが見つかりません: {DEFAULT_SELFCARE_PATH}\n"
+            "体調マーカー（○/△/×）は「記載なし」として表示されます。"
+        )
+        df["condition_points"] = None
+        df["condition_label"] = None
+    return df
+
+
+def _condition_hover_text(label, points) -> str:
+    if label is None:
+        return "記載なし"
+    if points is None or pd.isna(points):
+        return label
+    return f"{label}（{int(points)}pt）"
+
+
+def build_figure(df, axis_label: str, axis_col: str) -> go.Figure:
+    styles = [
+        _CONDITION_STYLE.get(label, _CONDITION_DEFAULT_STYLE) for label in df["condition_label"]
+    ]
+    hover_condition = [
+        _condition_hover_text(label, points)
+        for label, points in zip(df["condition_label"], df["condition_points"], strict=False)
+    ]
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=df["date"],
+            y=df[axis_col],
+            mode="lines+markers",
+            line=dict(color="#90a4ae"),
+            marker=dict(
+                size=11,
+                symbol=[s["symbol"] for s in styles],
+                color=[s["color"] for s in styles],
+                line=dict(width=1, color="white"),
+            ),
+            customdata=hover_condition,
+            hovertemplate="%{x|%Y-%m-%d}<br>値: %{y}<br>体調: %{customdata}<extra></extra>",
+            name=axis_label,
+        )
+    )
+    fig.update_layout(
+        margin=dict(l=40, r=20, t=20, b=40),
+        height=420,
+        yaxis_title=axis_label,
+        xaxis_title="日付",
+        showlegend=False,
+    )
+
+    if axis_col in ("bedtime_hours", "wake_hours"):
+        _apply_time_axis_ticks(fig, df[axis_col].dropna().tolist())
+    elif axis_col == "quality_score":
+        fig.update_yaxes(
+            tickmode="array",
+            tickvals=list(_QUALITY_SCORE_TICKS.keys()),
+            ticktext=list(_QUALITY_SCORE_TICKS.values()),
+        )
+    return fig
+
+
+def render_condition_legend() -> None:
+    st.caption(
+        "マーカー（体調・セルフケアシート由来）: "
+        + "　".join(_CONDITION_STYLE[k]["label"] for k in ("良好", "普通", "悪い"))
+        + f"（0pt=良い、1〜{CONDITION_BAD_THRESHOLD - 1}pt=普通、"
+        + f"{CONDITION_BAD_THRESHOLD}pt以上=悪い。記載なしは灰色の○）"
+    )
+
+
+def render_stats(df, axis_col: str) -> None:
+    s = summarize(df[axis_col])
+    cols = st.columns(4)
+    cols[0].metric("データ件数", s.count)
+    cols[1].metric("平均", f"{s.mean:.2f}" if s.mean is not None else "―")
+    cols[2].metric("中央値", f"{s.median:.2f}" if s.median is not None else "―")
+    cols[3].metric("最頻値", f"{s.mode:.2f}" if s.mode is not None else "―")
+
+
+def render_ai_insight(df, axis_col: str, axis_label: str, period_label: str) -> None:
+    st.subheader("振り返りコメント")
+    st.caption(
+        "※ 医学的な診断は行いません。あくまで傾向の提示と、面談での対話のきっかけを"
+        "提案するための参考コメントです。"
+    )
+
+    st.info(generate_rule_based_insight(df, axis_col, axis_label, period_label))
+
+    expander_label = f"AIによる詳しい解説（{DEFAULT_MODEL}、生成に時間がかかります）"
+    with st.expander(expander_label):
+        if st.button("詳しい解説を生成する", key=f"gen_{axis_col}_{period_label}"):
+            with st.spinner(f"{DEFAULT_MODEL} で考察を生成しています…"):
+                try:
+                    text = generate_insight(df, axis_col, axis_label, period_label)
+                    st.info(text)
+                except LLMUnavailableError as e:
+                    st.error(str(e))
+
+
+def main() -> None:
+    st.set_page_config(page_title="体調・睡眠分析ダッシュボード", layout="wide")
+    st.title("体調・睡眠分析ダッシュボード")
+    st.caption("すべてのデータ処理・AI推論はローカルPC内で完結し、外部には一切送信されません。")
+
+    df_all = load_source_dataframe()
+
+    with st.sidebar:
+        st.header("表示設定")
+        axis_label = st.radio("縦軸（表示する項目）", [label for label, _ in AXIS_OPTIONS])
+        axis_col = dict(AXIS_OPTIONS)[axis_label]
+        period_label = st.radio("期間", PERIOD_OPTIONS, index=1)
+
+    df = filter_by_period(df_all, period_label)
+
+    if df.empty:
+        st.warning("選択した期間にデータがありません。")
+        return
+
+    fig = build_figure(df, axis_label, axis_col)
+    st.plotly_chart(fig, use_container_width=True)
+    render_condition_legend()
+
+    render_stats(df, axis_col)
+    st.divider()
+    render_ai_insight(df, axis_col, axis_label, period_label)
+
+
+if __name__ == "__main__":
+    main()
