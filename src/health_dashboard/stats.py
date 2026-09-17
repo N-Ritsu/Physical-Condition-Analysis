@@ -38,3 +38,16 @@ def correlation(df: pd.DataFrame, col_a: str, col_b: str) -> float | None:
         return None
     corr = paired[col_a].corr(paired[col_b])
     return float(corr) if pd.notna(corr) else None
+
+
+def correlation_matrix(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    """指定した列同士のピアソン相関係数行列を算出する。
+
+    対角線（自分自身との相関）は常に自明（1.0）で比較の意味を持たないため、
+    表示上「対象外」として扱えるようNaNにする。データ不足で算出できないペアもNaN。
+    """
+    matrix = pd.DataFrame(index=columns, columns=columns, dtype=float)
+    for row in columns:
+        for col in columns:
+            matrix.loc[row, col] = float("nan") if row == col else correlation(df, row, col)
+    return matrix

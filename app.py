@@ -27,11 +27,16 @@ from health_dashboard.data_loader import (
 )
 from health_dashboard.formatting import format_clock
 from health_dashboard.rule_based_insight import generate_rule_based_insight
-from health_dashboard.stats import summarize
+from health_dashboard.stats import correlation_matrix, summarize
 
 DEFAULT_DATA_PATH = Path(__file__).parent / "data" / "日報データ.xlsx"
 DEFAULT_SELFCARE_PATH = Path(__file__).parent / "data" / "オリジナルセルフケアシート .xlsx"
 PERIOD_OPTIONS = ["直近1週間", "直近1ヶ月", "全期間"]
+DISPLAY_MODE_OPTIONS = ["グラフ", "相関表"]
+
+# 相関係数の絶対値に対する強さの判定基準。
+_CORRELATION_STRONG_THRESHOLD = 0.6
+_CORRELATION_MODERATE_THRESHOLD = 0.3
 
 # マーカー（○/△/×）はセルフケアシート由来の体調ポイントを表す（睡眠の質ではない）。
 # 0pt=良好、1〜2pt=普通、3pt=注意、4pt=警戒、5pt以上=異常の5段階。
@@ -237,6 +242,44 @@ def render_insight(df, axis_col: str, axis_label: str, period_label: str) -> Non
     st.info(generate_rule_based_insight(df, axis_col, axis_label, period_label))
 
 
+def _correlation_cell_style(r: float) -> str:
+    if pd.isna(r):
+        return "background-color: #f5f5f5; color: #bdbdbd;"
+    abs_r = abs(r)
+    if abs_r >= _CORRELATION_STRONG_THRESHOLD:
+        return "background-color: #ef5350; color: white;"
+    if abs_r >= _CORRELATION_MODERATE_THRESHOLD:
+        return "background-color: #fff176;"
+    return "background-color: white;"
+
+
+def render_correlation_table(df: pd.DataFrame) -> None:
+    st.subheader("相関表")
+    st.caption(
+        "すべてのデータ期間（全期間）を使って算出したピアソン相関係数です。"
+        f"｜r｜が{_CORRELATION_STRONG_THRESHOLD}以上を赤（相関が強い）、"
+        f"{_CORRELATION_MODERATE_THRESHOLD}〜{_CORRELATION_STRONG_THRESHOLD}を黄"
+        "（相関がありそう）で示しています。左のサイドバーの縦軸・期間の選択は"
+        "この表には影響しません。"
+    )
+    st.caption(
+        "※ あくまで数値上の相関であり、因果関係を示すものではありません。"
+        "医学的な判断は行わず、面談で気になる組み合わせを話題にする際の参考としてください。"
+    )
+
+    axis_labels = [label for label, _ in AXIS_OPTIONS]
+    axis_cols = [col for _, col in AXIS_OPTIONS]
+
+    matrix = correlation_matrix(df, axis_cols)
+    matrix.index = axis_labels
+    matrix.columns = axis_labels
+
+    styled = matrix.style.map(_correlation_cell_style).format("{:.2f}", na_rep="―")
+    # st.dataframe（対話型グリッド）はStylerのna_repを無視してNaNを"None"と
+    # 表示してしまうため、Styler全体を静的HTMLとして描画するst.tableを使う。
+    st.table(styled)
+
+
 def main() -> None:
     st.set_page_config(page_title="体調・睡眠分析ダッシュボード", layout="wide")
     st.title("体調・睡眠分析ダッシュボード")
@@ -249,6 +292,11 @@ def main() -> None:
         axis_label = st.radio("縦軸（表示する項目）", [label for label, _ in AXIS_OPTIONS])
         axis_col = dict(AXIS_OPTIONS)[axis_label]
         period_label = st.radio("期間", PERIOD_OPTIONS, index=1)
+        display_mode = st.radio("表示", DISPLAY_MODE_OPTIONS)
+
+    if display_mode == "相関表":
+        render_correlation_table(df_all)
+        return
 
     df = filter_by_period(df_all, period_label)
 
