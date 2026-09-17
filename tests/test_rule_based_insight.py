@@ -148,8 +148,8 @@ def test_stability_window_year_view_finds_best_and_worst_month():
     values = _calm(5, 28) + _alternating(1, 10, 28)
     df = _df(values, axis_col="mood_wake")
     text = generate_rule_based_insight(df, "mood_wake", "気分（起床時）", "全期間")
-    assert "1月1日〜1月28日が最も安定し" in text
-    assert "1月29日〜2月25日にばらつきが最も大きく" in text
+    assert "1/1〜1/28が最も安定し" in text
+    assert "1/29〜2/25にばらつきが最も大きく" in text
     assert "ばらつきが大きかった時期に近い状態です。" in text
     # 直近が最も不安定だった時期に近いため、締めは注意喚起になる
     assert "気になる変化が見られるため、気にかけてあげたほうが良いかもしれません。" in text
@@ -162,7 +162,7 @@ def test_sentence_order_places_level_between_stability_main_and_recent():
     df = _df(values, axis_col="mood_wake")
     text = generate_rule_based_insight(df, "mood_wake", "気分（起床時）", "全期間")
 
-    stability_main_pos = text.index("1月1日〜1月28日が最も安定し")
+    stability_main_pos = text.index("1/1〜1/28が最も安定し")
     level_pos = text.index("また、")
     stability_recent_pos = text.index("直近1か月は平均")
 
@@ -198,8 +198,8 @@ def test_stability_window_month_view_finds_best_and_worst_week():
     values = stable_week + volatile_week + stable_week + stable_week
     df = _df(values, axis_col="mood_wake")
     text = generate_rule_based_insight(df, "mood_wake", "気分（起床時）", "直近1ヶ月")
-    assert "1月1日〜1月7日が最も安定し" in text
-    assert "1月8日〜1月14日にばらつきが最も大きく" in text
+    assert "1/1〜1/7が最も安定し" in text
+    assert "1/8〜1/14にばらつきが最も大きく" in text
     assert "安定していた時期に近い落ち着き具合です。" in text
     # 直近は安定側に近いが、期間内に不安定な週もあったため自己分析を促す
     assert "それぞれの期間での生活リズムを比較すると、重要な要素が見つかるかもしれません。" in text
@@ -268,8 +268,8 @@ def test_level_window_reported_separately_from_stability():
     df = _df(values, axis_col="night_awakenings")
     text = generate_rule_based_insight(df, "night_awakenings", "中途覚醒回数", "全期間")
     assert "安定度に大きな違いは見られませんでした" in text
-    assert "1月1日〜1月28日は中途覚醒回数が最も良い状態" in text
-    assert "1月29日〜2月25日は注意したい状態" in text
+    assert "1/1〜1/28は中途覚醒回数が最も良い状態" in text
+    assert "1/29〜2/25は注意したい状態" in text
 
 
 def test_level_window_recent_bad_triggers_warning():

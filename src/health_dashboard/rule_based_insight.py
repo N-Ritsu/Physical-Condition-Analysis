@@ -99,8 +99,9 @@ _ABSOLUTE_BAD_THRESHOLD: dict[str, float] = {
 }
 
 
-def _format_date_jp(d: dt.date) -> str:
-    return f"{d.month}月{d.day}日"
+def _format_date_md(d: dt.date) -> str:
+    """グラフの横軸表示（月/日）に合わせた日付表記。"""
+    return f"{d.month}/{d.day}"
 
 
 def _trend_phrase(
@@ -408,10 +409,10 @@ def _stability_window_phrase(
         return main, recent_sentence
 
     # stability_pattern == "large_gap"
-    best_start = _format_date_jp(analysis.stability_best["start"])
-    best_end = _format_date_jp(analysis.stability_best["end"])
-    worst_start = _format_date_jp(analysis.stability_worst["start"])
-    worst_end = _format_date_jp(analysis.stability_worst["end"])
+    best_start = _format_date_md(analysis.stability_best["start"])
+    best_end = _format_date_md(analysis.stability_best["end"])
+    worst_start = _format_date_md(analysis.stability_worst["start"])
+    worst_end = _format_date_md(analysis.stability_worst["end"])
     best_range = f"{best_start}〜{best_end}"
     worst_range = f"{worst_start}〜{worst_end}"
     main = f"{best_range}が最も安定し、{worst_range}にばらつきが最も大きくなっていました。"
@@ -441,10 +442,10 @@ def _level_window_phrase(analysis: _PeriodAnalysis | None, axis_col: str, axis_l
     if analysis is None or analysis.level_best is None or not analysis.level_gap_is_large:
         return ""
 
-    best_start = _format_date_jp(analysis.level_best["start"])
-    best_end = _format_date_jp(analysis.level_best["end"])
-    worst_start = _format_date_jp(analysis.level_worst["start"])
-    worst_end = _format_date_jp(analysis.level_worst["end"])
+    best_start = _format_date_md(analysis.level_best["start"])
+    best_end = _format_date_md(analysis.level_best["end"])
+    worst_start = _format_date_md(analysis.level_worst["start"])
+    worst_end = _format_date_md(analysis.level_worst["end"])
     best_range = f"{best_start}〜{best_end}"
     worst_range = f"{worst_start}〜{worst_end}"
     best_text = format_axis_value(axis_col, analysis.level_best["mean"])

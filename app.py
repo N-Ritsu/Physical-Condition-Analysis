@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import sys
 from pathlib import Path
 
@@ -62,6 +63,44 @@ def _apply_time_axis_ticks(fig: go.Figure, values: list[float]) -> None:
     tickvals = list(range(start, int(hi) + step + 1, step))
     ticktext = [format_clock(v) for v in tickvals]
     fig.update_yaxes(tickmode="array", tickvals=tickvals, ticktext=ticktext)
+
+
+def _apply_date_axis_ticks(fig: go.Figure, dates: list) -> None:
+    """横軸（日付）の目盛りを各月の1日・15日に固定する。
+
+    表示期間が長い（「全期間」等）と、データ点の間隔に依存したPlotlyの既定の
+    目盛りが不規則な間隔に見えてしまうため、月初・月半ばという分かりやすい
+    区切りに揃える。該当日がほぼ無い短い期間（直近1週間等）では、目盛りが
+    1つ以下になり不自然になるため既定の目盛りのままにする。
+    """
+    valid = [d for d in dates if d is not None]
+    if not valid:
+        return
+    min_date, max_date = min(valid), max(valid)
+
+    tickvals: list[dt.date] = []
+    year, month = min_date.year, min_date.month
+    while (year, month) <= (max_date.year, max_date.month):
+        for day in (1, 15):
+            candidate = dt.date(year, month, day)
+            if min_date <= candidate <= max_date:
+                tickvals.append(candidate)
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+
+    if len(tickvals) < 2:
+        return
+
+    ticktext = []
+    for i, d in enumerate(tickvals):
+        label = f"{d.month}/{d.day}"
+        if i == 0 or (d.month == 1 and d.day == 1):
+            label += f"<br>{d.year}"
+        ticktext.append(label)
+
+    fig.update_xaxes(tickmode="array", tickvals=tickvals, ticktext=ticktext)
 
 
 @st.cache_data
@@ -137,7 +176,7 @@ def build_figure(df, axis_label: str, axis_col: str) -> go.Figure:
                 line=dict(width=1, color="white"),
             ),
             customdata=hover_condition,
-            hovertemplate="%{x|%Y-%m-%d}<br>値: %{y}<br>体調: %{customdata}<extra></extra>",
+            hovertemplate="%{x|%-m/%-d}<br>値: %{y}<br>体調: %{customdata}<extra></extra>",
             name=axis_label,
         )
     )
@@ -148,6 +187,9 @@ def build_figure(df, axis_label: str, axis_col: str) -> go.Figure:
         xaxis_title="日付",
         showlegend=False,
     )
+    # 全期間表示（月初・月半ばの目盛り）と表記を揃えるため、既定の目盛り
+    # （直近1週間・直近1ヶ月など）も月/日形式にする。
+    fig.update_xaxes(tickformat="%-m/%-d")
 
     if axis_col in ("bedtime_hours", "wake_hours"):
         _apply_time_axis_ticks(fig, df[axis_col].dropna().tolist())
@@ -157,6 +199,8 @@ def build_figure(df, axis_label: str, axis_col: str) -> go.Figure:
             tickvals=list(_QUALITY_SCORE_TICKS.keys()),
             ticktext=list(_QUALITY_SCORE_TICKS.values()),
         )
+
+    _apply_date_axis_ticks(fig, df["date"].tolist())
     return fig
 
 
