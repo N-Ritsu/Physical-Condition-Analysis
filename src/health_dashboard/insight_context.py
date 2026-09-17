@@ -1,4 +1,4 @@
-"""ルールベース／LLMどちらの解説生成でも使う、統計サマリーの共通コンテキスト。"""
+"""振り返りコメント生成（rule_based_insight）で使う、統計サマリーの共通コンテキスト。"""
 
 from __future__ import annotations
 

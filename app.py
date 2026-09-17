@@ -25,7 +25,6 @@ from health_dashboard.data_loader import (
     load_selfcare_points,
 )
 from health_dashboard.formatting import format_clock
-from health_dashboard.llm_insight import DEFAULT_MODEL, LLMUnavailableError, generate_insight
 from health_dashboard.rule_based_insight import generate_rule_based_insight
 from health_dashboard.stats import summarize
 
@@ -184,7 +183,7 @@ def render_stats(df, axis_col: str) -> None:
     cols[4].metric("ばらつき（標準偏差）", f"{s.std:.2f}" if s.std is not None else "―")
 
 
-def render_ai_insight(df, axis_col: str, axis_label: str, period_label: str) -> None:
+def render_insight(df, axis_col: str, axis_label: str, period_label: str) -> None:
     st.subheader("振り返りコメント")
     st.caption(
         "※ 医学的な診断は行いません。あくまで傾向の提示と、面談での対話のきっかけを"
@@ -193,21 +192,11 @@ def render_ai_insight(df, axis_col: str, axis_label: str, period_label: str) -> 
 
     st.info(generate_rule_based_insight(df, axis_col, axis_label, period_label))
 
-    expander_label = f"AIによる詳しい解説（{DEFAULT_MODEL}、生成に時間がかかります）"
-    with st.expander(expander_label):
-        if st.button("詳しい解説を生成する", key=f"gen_{axis_col}_{period_label}"):
-            with st.spinner(f"{DEFAULT_MODEL} で考察を生成しています…"):
-                try:
-                    text = generate_insight(df, axis_col, axis_label, period_label)
-                    st.info(text)
-                except LLMUnavailableError as e:
-                    st.error(str(e))
-
 
 def main() -> None:
     st.set_page_config(page_title="体調・睡眠分析ダッシュボード", layout="wide")
     st.title("体調・睡眠分析ダッシュボード")
-    st.caption("すべてのデータ処理・AI推論はローカルPC内で完結し、外部には一切送信されません。")
+    st.caption("すべてのデータ処理はローカルPC内で完結し、外部には一切送信されません。")
 
     df_all = load_source_dataframe()
 
@@ -229,7 +218,7 @@ def main() -> None:
 
     render_stats(df, axis_col)
     st.divider()
-    render_ai_insight(df, axis_col, axis_label, period_label)
+    render_insight(df, axis_col, axis_label, period_label)
 
 
 if __name__ == "__main__":
