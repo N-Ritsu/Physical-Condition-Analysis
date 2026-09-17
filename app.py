@@ -176,11 +176,12 @@ def render_condition_legend() -> None:
 
 def render_stats(df, axis_col: str) -> None:
     s = summarize(df[axis_col])
-    cols = st.columns(4)
+    cols = st.columns(5)
     cols[0].metric("データ件数", s.count)
     cols[1].metric("平均", f"{s.mean:.2f}" if s.mean is not None else "―")
     cols[2].metric("中央値", f"{s.median:.2f}" if s.median is not None else "―")
     cols[3].metric("最頻値", f"{s.mode:.2f}" if s.mode is not None else "―")
+    cols[4].metric("ばらつき（標準偏差）", f"{s.std:.2f}" if s.std is not None else "―")
 
 
 def render_ai_insight(df, axis_col: str, axis_label: str, period_label: str) -> None:

@@ -60,6 +60,20 @@ AXIS_OPTIONS: list[tuple[str, str]] = [
     ("気分（通所時）", "mood_commute"),
 ]
 
+# 各軸の「良し悪しの方向性」。安定度（ばらつき）の評価とは別に、平均値の増減を
+# どう解釈するかを表す振り返りコメント生成用のメタデータ。
+# "none"   = 方向性なし。安定度（規則性）のみを評価する（例: 起床時間・入眠時間）。
+# "lower"  = 少ないほど良い（例: 中途覚醒回数）。
+# "higher" = 多いほど良い（例: 睡眠の質・気分）。
+AXIS_DIRECTION: dict[str, str] = {
+    "bedtime_hours": "none",
+    "wake_hours": "none",
+    "quality_score": "higher",
+    "night_awakenings": "lower",
+    "mood_wake": "higher",
+    "mood_commute": "higher",
+}
+
 
 def find_header_row(path: str | Path) -> int:
     """「日付」列を含む行を探し、pandasのheader引数用の0始まり行番号を返す。"""

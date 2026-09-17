@@ -11,6 +11,7 @@ def test_summarize_basic():
     assert result.mean == pytest.approx(2.0)
     assert result.median == 2.0
     assert result.mode == 2.0
+    assert result.std == pytest.approx(s.dropna().std())
 
 
 def test_summarize_empty():
@@ -19,6 +20,14 @@ def test_summarize_empty():
     assert result.mean is None
     assert result.median is None
     assert result.mode is None
+    assert result.std is None
+
+
+def test_summarize_single_value_has_no_std():
+    result = summarize(pd.Series([5]))
+    assert result.count == 1
+    assert result.mean == 5.0
+    assert result.std is None
 
 
 def test_correlation():
