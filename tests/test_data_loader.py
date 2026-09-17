@@ -5,7 +5,9 @@ import pandas as pd
 import pytest
 
 from health_dashboard.data_loader import (
-    CONDITION_BAD_THRESHOLD,
+    CONDITION_ABNORMAL_THRESHOLD,
+    CONDITION_CAUTION_POINTS,
+    CONDITION_WARNING_POINTS,
     attach_condition,
     condition_label_from_points,
     filter_by_period,
@@ -193,9 +195,11 @@ def test_load_selfcare_points_duplicate_date_keeps_first_sheet(tmp_path):
         (float("nan"), None),
         (0, "良好"),
         (1, "普通"),
-        (CONDITION_BAD_THRESHOLD - 1, "普通"),
-        (CONDITION_BAD_THRESHOLD, "悪い"),
-        (CONDITION_BAD_THRESHOLD + 10, "悪い"),
+        (CONDITION_CAUTION_POINTS - 1, "普通"),
+        (CONDITION_CAUTION_POINTS, "注意"),
+        (CONDITION_WARNING_POINTS, "警戒"),
+        (CONDITION_ABNORMAL_THRESHOLD, "異常"),
+        (CONDITION_ABNORMAL_THRESHOLD + 10, "異常"),
     ],
 )
 def test_condition_label_from_points(points, expected):
@@ -209,7 +213,7 @@ def test_attach_condition():
     merged = attach_condition(df, selfcare_df)
 
     assert merged.loc[0, "condition_points"] == 7
-    assert merged.loc[0, "condition_label"] == "悪い"
+    assert merged.loc[0, "condition_label"] == "異常"
     assert pd.isna(merged.loc[1, "condition_points"])
     assert merged.loc[1, "condition_label"] is None
 

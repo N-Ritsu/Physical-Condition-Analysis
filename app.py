@@ -16,7 +16,9 @@ import streamlit as st
 
 from health_dashboard.data_loader import (
     AXIS_OPTIONS,
-    CONDITION_BAD_THRESHOLD,
+    CONDITION_ABNORMAL_THRESHOLD,
+    CONDITION_CAUTION_POINTS,
+    CONDITION_WARNING_POINTS,
     attach_condition,
     filter_by_period,
     load_daily_reports,
@@ -32,12 +34,21 @@ DEFAULT_SELFCARE_PATH = Path(__file__).parent / "data" / "オリジナルセル�
 PERIOD_OPTIONS = ["直近1週間", "直近1ヶ月", "全期間"]
 
 # マーカー（○/△/×）はセルフケアシート由来の体調ポイントを表す（睡眠の質ではない）。
+# 0pt=良好、1〜2pt=普通、3pt=注意、4pt=警戒、5pt以上=異常の5段階。
 _CONDITION_STYLE = {
-    "良好": {"symbol": "circle", "color": "#2e7d32", "label": "○ 良い"},
-    "普通": {"symbol": "triangle-up", "color": "#f9a825", "label": "△ 普通"},
-    "悪い": {"symbol": "x", "color": "#c62828", "label": "× 悪い"},
+    "良好": {"symbol": "circle", "color": "#1565c0", "label": "○ 良い"},
+    "普通": {"symbol": "triangle-up", "color": "#2e7d32", "label": "△ 普通"},
+    "注意": {"symbol": "x", "color": "#fb8c00", "label": "× 注意"},
+    "警戒": {"symbol": "x", "color": "#c62828", "label": "× 警戒"},
+    "異常": {"symbol": "x", "color": "#6a1b9a", "label": "× 異常"},
 }
-_CONDITION_DEFAULT_STYLE = {"symbol": "circle-open", "color": "#9e9e9e", "label": "記載なし"}
+# セルフケアシートに記録がない日（日報はあるがセルフケアの記入がない日）。
+# 早退などにより記入できなかった可能性を示すサインとして、黒い×で表示する。
+_CONDITION_DEFAULT_STYLE = {
+    "symbol": "x",
+    "color": "#000000",
+    "label": "× 記録なし（早退等の可能性）",
+}
 
 _QUALITY_SCORE_TICKS = {1: "悪い", 2: "普通", 3: "良好"}
 
@@ -89,7 +100,7 @@ def load_source_dataframe():
     else:
         st.info(
             f"セルフケアシートが見つかりません: {DEFAULT_SELFCARE_PATH}\n"
-            "体調マーカー（○/△/×）は「記載なし」として表示されます。"
+            f"体調マーカーはすべて「{_CONDITION_DEFAULT_STYLE['label']}」として表示されます。"
         )
         df["condition_points"] = None
         df["condition_label"] = None
@@ -98,7 +109,7 @@ def load_source_dataframe():
 
 def _condition_hover_text(label, points) -> str:
     if label is None:
-        return "記載なし"
+        return _CONDITION_DEFAULT_STYLE["label"]
     if points is None or pd.isna(points):
         return label
     return f"{label}（{int(points)}pt）"
@@ -151,11 +162,15 @@ def build_figure(df, axis_label: str, axis_col: str) -> go.Figure:
 
 
 def render_condition_legend() -> None:
+    order = ("良好", "普通", "注意", "警戒", "異常")
     st.caption(
         "マーカー（体調・セルフケアシート由来）: "
-        + "　".join(_CONDITION_STYLE[k]["label"] for k in ("良好", "普通", "悪い"))
-        + f"（0pt=良い、1〜{CONDITION_BAD_THRESHOLD - 1}pt=普通、"
-        + f"{CONDITION_BAD_THRESHOLD}pt以上=悪い。記載なしは灰色の○）"
+        + "　".join(_CONDITION_STYLE[k]["label"] for k in order)
+        + f"　{_CONDITION_DEFAULT_STYLE['label']}"
+        + f"（0pt=良好、1〜{CONDITION_CAUTION_POINTS - 1}pt=普通、"
+        + f"{CONDITION_CAUTION_POINTS}pt=注意、{CONDITION_WARNING_POINTS}pt=警戒、"
+        + f"{CONDITION_ABNORMAL_THRESHOLD}pt以上=異常。"
+        + "セルフケアシートに記録がない日は早退等の可能性を示す黒い×で表示）"
     )
 
 

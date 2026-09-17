@@ -43,12 +43,12 @@ _AWAKENING_RE = re.compile(r"中途覚醒(\d+)(以上)?")
 # セルフケアシートのチェックマーク -> ポイント（大きいほど不調）。
 SELFCARE_MARK_TO_POINTS = {"〇": 0, "△": 1, "✕": 2}
 
-# 体調ポイントを「悪い」と判定する閾値。
-# 実データ（オリジナルセルフケアシート）を集計すると、0点の日を除く非ゼロの日は
-# 1〜4点に大半が集中し、7点・13点・20点のように明確な外れ値として離れた日が
-# 少数存在する（体調が大きく崩れた日に相当）。この自然な区切りに基づき、
-# 5点以上を「悪い」とする。現場の実感と合わない場合はこの値を調整すればよい。
-CONDITION_BAD_THRESHOLD = 5
+# 体調ポイントを5段階のラベルに変換する閾値。
+# 0点=良好、1〜2点=普通とし、3点以上は1点刻みで注意・警戒・異常と細分化する。
+# 5点（CONDITION_ABNORMAL_THRESHOLD）以上は異常値として扱う。
+CONDITION_CAUTION_POINTS = 3  # 3点 = 注意
+CONDITION_WARNING_POINTS = 4  # 4点 = 警戒
+CONDITION_ABNORMAL_THRESHOLD = 5  # 5点以上 = 異常
 
 # 表示用の縦軸選択肢: (UI表示名, DataFrameの列名)
 AXIS_OPTIONS: list[tuple[str, str]] = [
@@ -247,18 +247,23 @@ def load_selfcare_points(path: str | Path) -> pd.DataFrame:
 
 
 def condition_label_from_points(points: float | None) -> str | None:
-    """体調ポイントを 良好/普通/悪い の3段階ラベルに変換する。
+    """体調ポイントを 良好/普通/注意/警戒/異常 の5段階ラベルに変換する。
 
-    0点=良好、1点〜(CONDITION_BAD_THRESHOLD - 1)点=普通、
-    CONDITION_BAD_THRESHOLD点以上=悪い とする。
+    0点=良好、1〜2点=普通、3点=注意、4点=警戒、
+    CONDITION_ABNORMAL_THRESHOLD（5点）以上=異常 とする。
+    セルフケアシートに記録がない日（points is None）は None を返す。
     """
     if points is None or (isinstance(points, float) and pd.isna(points)):
         return None
     if points <= 0:
         return "良好"
-    if points < CONDITION_BAD_THRESHOLD:
+    if points < CONDITION_CAUTION_POINTS:
         return "普通"
-    return "悪い"
+    if points == CONDITION_CAUTION_POINTS:
+        return "注意"
+    if points == CONDITION_WARNING_POINTS:
+        return "警戒"
+    return "異常"
 
 
 def attach_condition(df: pd.DataFrame, selfcare_df: pd.DataFrame) -> pd.DataFrame:
