@@ -13,6 +13,10 @@ from pathlib import Path
 import openpyxl
 import pandas as pd
 
+# 利用者フォルダ内で、ファイル名にこの文字列を含むものを該当ファイルとみなす。
+DAILY_REPORT_KEYWORD = "日報"
+SELFCARE_KEYWORD = "セルフケア"
+
 # 元データの列名（Googleフォームの質問文がそのまま列名になっている）
 COL_DATE = "日付"
 COL_BEDTIME = "就寝時間"
@@ -39,6 +43,8 @@ QUALITY_SCORE_LABELS = {score: label for label, score in _QUALITY_SCORE.items()}
 _QUALITY_SEVERITY = {"良好": 0, "普通": 1, "悪い": 2}
 
 _AWAKENING_RE = re.compile(r"中途覚醒(\d+)(以上)?")
+# Googleスプレッドシートのエクスポートでは時刻が「9:30:00 午前」のような文字列になる。
+_TIME_TEXT_RE = re.compile(r"(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(午前|午後|AM|PM)?", re.IGNORECASE)
 
 # セルフケアシートのチェックマーク -> ポイント（大きいほど不調）。
 SELFCARE_MARK_TO_POINTS = {"〇": 0, "△": 1, "✕": 2}
@@ -75,6 +81,36 @@ AXIS_DIRECTION: dict[str, str] = {
     "mood_wake": "higher",
     "mood_commute": "higher",
 }
+
+
+def list_user_dirs(data_dir: str | Path) -> list[Path]:
+    """dataフォルダ直下の利用者フォルダ（サブフォルダ）を名前順で返す。"""
+    data_dir = Path(data_dir)
+    if not data_dir.is_dir():
+        return []
+    return sorted(p for p in data_dir.iterdir() if p.is_dir() and not p.name.startswith("."))
+
+
+def _find_excel_by_keyword(user_dir: Path, keyword: str) -> Path | None:
+    candidates = [
+        p for p in user_dir.glob("*.xlsx") if keyword in p.name and not p.name.startswith("~$")
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
+def find_user_files(user_dir: str | Path) -> tuple[Path | None, Path | None]:
+    """利用者フォルダ内から (日報, セルフケアシート) のExcelを返す。
+
+    ファイル名に「日報」「セルフケア」を含むxlsxを探す。該当が複数ある場合は
+    更新日時が最も新しいものを採用し、無ければNoneを返す。
+    """
+    user_dir = Path(user_dir)
+    return (
+        _find_excel_by_keyword(user_dir, DAILY_REPORT_KEYWORD),
+        _find_excel_by_keyword(user_dir, SELFCARE_KEYWORD),
+    )
 
 
 def find_header_row(path: str | Path) -> int:
@@ -131,12 +167,19 @@ def _coerce_time(value: object) -> dt.time | None:
     if isinstance(value, dt.time):
         return value
     if isinstance(value, str):
-        text = value.strip()
-        for fmt in ("%H:%M:%S", "%H:%M"):
-            try:
-                return dt.datetime.strptime(text, fmt).time()
-            except ValueError:
-                continue
+        m = _TIME_TEXT_RE.fullmatch(value.strip())
+        if m is None:
+            return None
+        hour, minute, second = int(m.group(1)), int(m.group(2)), int(m.group(3) or 0)
+        meridiem = (m.group(4) or "").lower()
+        if meridiem in ("午後", "pm") and hour < 12:
+            hour += 12
+        elif meridiem in ("午前", "am") and hour == 12:
+            hour = 0
+        try:
+            return dt.time(hour, minute, second)
+        except ValueError:
+            return None
     return None
 
 

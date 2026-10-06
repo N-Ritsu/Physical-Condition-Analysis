@@ -8,9 +8,12 @@ from health_dashboard.data_loader import (
     CONDITION_ABNORMAL_THRESHOLD,
     CONDITION_CAUTION_POINTS,
     CONDITION_WARNING_POINTS,
+    _coerce_time,
     attach_condition,
     condition_label_from_points,
     filter_by_period,
+    find_user_files,
+    list_user_dirs,
     load_daily_reports,
     load_selfcare_points,
     normalize_bedtime,
@@ -251,3 +254,72 @@ def test_filter_by_period():
 
     result = filter_by_period(df, "全期間")
     assert list(result["value"]) == [1, 2, 3]
+
+
+def test_list_user_dirs_returns_sorted_subfolders_only(tmp_path):
+    (tmp_path / "b利用者").mkdir()
+    (tmp_path / "a利用者").mkdir()
+    (tmp_path / ".hidden").mkdir()
+    (tmp_path / "memo.txt").write_text("x")
+
+    assert [p.name for p in list_user_dirs(tmp_path)] == ["a利用者", "b利用者"]
+
+
+def test_list_user_dirs_missing_dir_returns_empty(tmp_path):
+    assert list_user_dirs(tmp_path / "none") == []
+
+
+def test_find_user_files_matches_by_keyword_in_name(tmp_path):
+    (tmp_path / "西村_日報（2026年9月）.xlsx").write_text("")
+    (tmp_path / "オリジナルセルフケアシート .xlsx").write_text("")
+    (tmp_path / "その他.xlsx").write_text("")
+    (tmp_path / "~$日報.xlsx").write_text("")  # Excelの一時ファイルは無視
+
+    daily, selfcare = find_user_files(tmp_path)
+
+    assert daily.name == "西村_日報（2026年9月）.xlsx"
+    assert selfcare.name == "オリジナルセルフケアシート .xlsx"
+
+
+def test_find_user_files_missing_returns_none(tmp_path):
+    (tmp_path / "日報.xlsx").write_text("")
+
+    daily, selfcare = find_user_files(tmp_path)
+
+    assert daily is not None
+    assert selfcare is None
+
+
+def test_find_user_files_prefers_newest_when_multiple(tmp_path):
+    import os
+
+    old = tmp_path / "日報_旧.xlsx"
+    new = tmp_path / "日報_新.xlsx"
+    old.write_text("")
+    new.write_text("")
+    os.utime(old, (1_000_000, 1_000_000))
+    os.utime(new, (2_000_000, 2_000_000))
+
+    daily, _ = find_user_files(tmp_path)
+
+    assert daily.name == "日報_新.xlsx"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("9:30:00 午前", dt.time(9, 30)),
+        ("6:50:00 午前", dt.time(6, 50)),
+        ("9:30:00 午後", dt.time(21, 30)),
+        ("12:10:00 午前", dt.time(0, 10)),
+        ("12:10:00 午後", dt.time(12, 10)),
+        ("9:30 PM", dt.time(21, 30)),
+        ("06:50:00", dt.time(6, 50)),
+        ("6:50", dt.time(6, 50)),
+        ("なし", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_coerce_time_text_formats(raw, expected):
+    assert _coerce_time(raw) == expected

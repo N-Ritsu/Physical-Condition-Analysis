@@ -22,6 +22,8 @@ from health_dashboard.data_loader import (
     CONDITION_WARNING_POINTS,
     attach_condition,
     filter_by_period,
+    find_user_files,
+    list_user_dirs,
     load_daily_reports,
     load_selfcare_points,
 )
@@ -29,8 +31,7 @@ from health_dashboard.formatting import format_clock
 from health_dashboard.rule_based_insight import generate_rule_based_insight
 from health_dashboard.stats import correlation_matrix, summarize
 
-DEFAULT_DATA_PATH = Path(__file__).parent / "data" / "日報データ.xlsx"
-DEFAULT_SELFCARE_PATH = Path(__file__).parent / "data" / "オリジナルセルフケアシート .xlsx"
+DATA_DIR = Path(__file__).parent / "data"
 PERIOD_OPTIONS = ["直近1週間", "直近1ヶ月", "全期間"]
 DISPLAY_MODE_OPTIONS = ["グラフ", "相関表"]
 
@@ -118,12 +119,15 @@ def _load_selfcare(path_str: str, mtime: float):
     return load_selfcare_points(path_str)
 
 
-def load_source_dataframe():
-    if DEFAULT_DATA_PATH.exists():
-        df = _load_data(str(DEFAULT_DATA_PATH), DEFAULT_DATA_PATH.stat().st_mtime)
+def load_source_dataframe(user_dir: Path | None):
+    daily_path, selfcare_path = find_user_files(user_dir) if user_dir else (None, None)
+
+    if daily_path is not None:
+        df = _load_data(str(daily_path), daily_path.stat().st_mtime)
     else:
+        location = user_dir if user_dir else DATA_DIR
         st.warning(
-            f"既定のデータファイルが見つかりません: {DEFAULT_DATA_PATH}\n"
+            f"日報のファイル（ファイル名に「日報」を含むExcel）が見つかりません: {location}\n"
             "日報データ（Excel）をアップロードしてください。"
         )
         uploaded = st.file_uploader("日報データ（.xlsx）", type=["xlsx"])
@@ -135,14 +139,13 @@ def load_source_dataframe():
         saved.write_bytes(uploaded.getbuffer())
         df = _load_data(str(saved), saved.stat().st_mtime)
 
-    if DEFAULT_SELFCARE_PATH.exists():
-        selfcare_df = _load_selfcare(
-            str(DEFAULT_SELFCARE_PATH), DEFAULT_SELFCARE_PATH.stat().st_mtime
-        )
+    if selfcare_path is not None:
+        selfcare_df = _load_selfcare(str(selfcare_path), selfcare_path.stat().st_mtime)
         df = attach_condition(df, selfcare_df)
     else:
         st.info(
-            f"セルフケアシートが見つかりません: {DEFAULT_SELFCARE_PATH}\n"
+            "セルフケアシート（ファイル名に「セルフケア」を含むExcel）が見つかりません: "
+            f"{user_dir or DATA_DIR}\n"
             f"体調マーカーはすべて「{_CONDITION_DEFAULT_STYLE['label']}」として表示されます。"
         )
         df["condition_points"] = None
@@ -295,10 +298,16 @@ def main() -> None:
     st.title("体調・睡眠分析ダッシュボード")
     st.caption("すべてのデータ処理はローカルPC内で完結し、外部には一切送信されません。")
 
-    df_all = load_source_dataframe()
-
+    user_dirs = list_user_dirs(DATA_DIR)
     with st.sidebar:
         st.header("表示設定")
+        user_dir = (
+            st.selectbox("利用者", user_dirs, format_func=lambda p: p.name) if user_dirs else None
+        )
+
+    df_all = load_source_dataframe(user_dir)
+
+    with st.sidebar:
         axis_label = st.radio("縦軸（表示する項目）", [label for label, _ in AXIS_OPTIONS])
         axis_col = dict(AXIS_OPTIONS)[axis_label]
         period_label = st.radio("期間", PERIOD_OPTIONS, index=1)
