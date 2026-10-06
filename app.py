@@ -40,6 +40,7 @@ from health_dashboard.data_loader import (
     find_user_files,
     list_user_dirs,
     load_absence_dates,
+    load_absence_records,
     load_daily_reports,
     load_selfcare_points,
 )
@@ -114,6 +115,13 @@ _HIGHLIGHT_STYLE = {
     "best_stability": ("rgba(33, 150, 243, 0.14)", "薄い青＝最も安定していた期間"),
 }
 
+# 欠席した日の縦線の色。精神的な理由=赤、体調の理由=黄、それ以外（通院など）=灰。
+_ABSENCE_STYLE = {
+    "mental": ("#e53935", "赤＝精神的な理由"),
+    "physical": ("#fbc02d", "黄＝体調の理由"),
+    "other": ("#9e9e9e", "灰＝その他（通院など）"),
+}
+
 _QUALITY_SCORE_TICKS = {1: "悪い", 2: "普通", 3: "良好"}
 
 
@@ -170,6 +178,11 @@ def _apply_date_axis_ticks(fig: go.Figure, dates: list) -> None:
 @st.cache_data
 def _load_data(path_str: str, mtime: float):
     return load_daily_reports(path_str)
+
+
+@st.cache_data
+def _load_absence_records(path_str: str, mtime: float):
+    return load_absence_records(path_str)
 
 
 @st.cache_data
@@ -265,6 +278,7 @@ def build_figure(
     axis_col: str,
     borders: list[BadBorder] | None = None,
     highlights: list[HighlightPeriod] | None = None,
+    absences: list[tuple[dt.date, str]] | None = None,
 ) -> go.Figure:
     is_categorical = axis_col in CATEGORICAL_AXIS_COLUMNS
     if is_categorical:
@@ -350,6 +364,12 @@ def build_figure(
             layer="below",
         )
 
+    for day, category in absences or []:
+        fig.add_vline(
+            x=dt.datetime.combine(day, dt.time()),
+            line=dict(color=_ABSENCE_STYLE[category][0], width=2),
+        )
+
     for border in borders or []:
         color = _BORDER_LINE_COLORS[border.min_rate]
         for i, y in enumerate(sorted(border.line_values, reverse=True)):
@@ -391,6 +411,17 @@ def render_condition_legend() -> None:
         + "セルフケアシートに記録がない日は早退等の可能性を示す黒い×で表示）",
         unsafe_allow_html=True,
     )
+
+
+def render_absence_legend(absences: list[tuple[dt.date, str]]) -> None:
+    used = {category for _, category in absences}
+    items = [
+        f'<span style="color:{color}; font-weight:600">{text}</span>'
+        for category, (color, text) in _ABSENCE_STYLE.items()
+        if category in used
+    ]
+    if items:
+        st.caption("縦線は欠席した日: " + "　".join(items), unsafe_allow_html=True)
 
 
 def render_highlight_legend(highlights: list[HighlightPeriod]) -> None:
@@ -598,6 +629,20 @@ def build_attendance_score_figure(weekly: pd.DataFrame) -> go.Figure:
     return fig
 
 
+def _absences_in_range(user_dir: Path | None, df: pd.DataFrame) -> list[tuple[dt.date, str]]:
+    """表示中のグラフの日付範囲にある欠席日（日報のある日は除く）を返す。"""
+    absence_path = find_absence_file(user_dir) if user_dir else None
+    if absence_path is None or df.empty:
+        return []
+    try:
+        records = _load_absence_records(str(absence_path), absence_path.stat().st_mtime)
+    except ValueError:
+        return []
+    reported = set(df["date"])
+    start, end = min(df["date"]), max(df["date"])
+    return [(d, c) for d, c in records if start <= d <= end and d not in reported]
+
+
 def render_attendance(df_all: pd.DataFrame, user_dir: Path | None) -> None:
     st.subheader("出席状況")
     absence_path = find_absence_file(user_dir) if user_dir else None
@@ -768,9 +813,12 @@ def main() -> None:
     if axis_col not in CATEGORICAL_AXIS_COLUMNS | WEATHER_AXIS_COLUMNS:
         highlights = find_highlight_periods(df, axis_col, period_label)
 
-    fig = build_figure(df, axis_label, axis_col, borders, highlights)
+    absences = _absences_in_range(user_dir, df)
+
+    fig = build_figure(df, axis_label, axis_col, borders, highlights, absences)
     st.plotly_chart(fig, use_container_width=True)
     render_condition_legend()
+    render_absence_legend(absences)
     render_highlight_legend(highlights)
     if borders:
         render_border_legend()

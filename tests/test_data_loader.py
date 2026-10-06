@@ -10,12 +10,14 @@ from health_dashboard.data_loader import (
     CONDITION_WARNING_POINTS,
     _coerce_time,
     attach_condition,
+    classify_absence_reason,
     condition_label_from_points,
     filter_by_period,
     find_absence_file,
     find_user_files,
     list_user_dirs,
     load_absence_dates,
+    load_absence_records,
     load_daily_reports,
     load_selfcare_points,
     normalize_bedtime,
@@ -402,3 +404,71 @@ def test_load_absence_dates_without_timestamp_column_raises(tmp_path):
 
     with pytest.raises(ValueError, match="タイムスタンプ"):
         load_absence_dates(path)
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [
+        ("精神不調", "mental"),
+        ("体調不良", "physical"),
+        ("通院", "other"),
+        ("家庭の都合", "other"),
+        ("精神不調, 体調不良", "mental"),  # 両方なら精神的な理由を優先
+        ("", "other"),
+        (None, "other"),
+        (float("nan"), "other"),
+    ],
+)
+def test_classify_absence_reason(reason, expected):
+    assert classify_absence_reason(reason) == expected
+
+
+def _write_absence_workbook(path, rows):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["タイムスタンプ", "欠席理由"])
+    for row in rows:
+        ws.append(list(row))
+    wb.save(path)
+
+
+def test_load_absence_records_returns_date_and_category_sorted(tmp_path):
+    path = tmp_path / "欠席.xlsx"
+    _write_absence_workbook(
+        path,
+        [
+            (dt.datetime(2026, 6, 24, 12, 0), "体調不良"),
+            (dt.datetime(2026, 6, 18, 10, 0), "精神不調"),
+            (dt.datetime(2026, 7, 1, 9, 0), "通院"),
+        ],
+    )
+
+    assert load_absence_records(path) == [
+        (dt.date(2026, 6, 18), "mental"),
+        (dt.date(2026, 6, 24), "physical"),
+        (dt.date(2026, 7, 1), "other"),
+    ]
+
+
+def test_load_absence_records_same_day_keeps_highest_priority(tmp_path):
+    path = tmp_path / "欠席.xlsx"
+    _write_absence_workbook(
+        path,
+        [
+            (dt.datetime(2026, 6, 18, 9, 0), "体調不良"),
+            (dt.datetime(2026, 6, 18, 18, 0), "精神不調"),  # 同じ日の再提出
+            (dt.datetime(2026, 6, 18, 19, 0), "通院"),
+        ],
+    )
+
+    assert load_absence_records(path) == [(dt.date(2026, 6, 18), "mental")]
+
+
+def test_load_absence_records_without_reason_column_is_other(tmp_path):
+    path = tmp_path / "欠席.xlsx"
+    wb = openpyxl.Workbook()
+    wb.active.append(["タイムスタンプ"])
+    wb.active.append([dt.datetime(2026, 6, 18, 9, 0)])
+    wb.save(path)
+
+    assert load_absence_records(path) == [(dt.date(2026, 6, 18), "other")]

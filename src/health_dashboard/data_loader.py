@@ -19,6 +19,10 @@ SELFCARE_KEYWORD = "セルフケア"
 ABSENCE_KEYWORD = "欠席"
 # 欠席フォームの回答日時の列。この日付を欠席日として扱う。
 COL_ABSENCE_TIMESTAMP = "タイムスタンプ"
+COL_ABSENCE_REASON = "欠席理由"
+
+# 欠席理由の分類。同じ日に複数の欠席連絡がある場合は、この順で優先する。
+ABSENCE_CATEGORY_PRIORITY = {"mental": 2, "physical": 1, "other": 0}
 
 # 元データの列名（Googleフォームの質問文がそのまま列名になっている）
 COL_DATE = "日付"
@@ -156,6 +160,44 @@ def load_absence_dates(path: str | Path) -> list[dt.date]:
         raise ValueError(f"「{COL_ABSENCE_TIMESTAMP}」列が見つかりません: {path}")
     timestamps = pd.to_datetime(raw[COL_ABSENCE_TIMESTAMP], errors="coerce").dropna()
     return sorted(set(timestamps.dt.date))
+
+
+def classify_absence_reason(reason: object) -> str:
+    """欠席理由を "mental"（精神的な理由）/ "physical"（体調の理由）/ "other"（それ以外）に分ける。
+
+    「精神不調」のように「精神」を含めば精神的な理由、「体調不良」のように「体調」を含めば
+    体調の理由とする。両方を含む場合は精神的な理由を優先する。通院などはotherとする。
+    """
+    text = "" if reason is None or (isinstance(reason, float) and pd.isna(reason)) else str(reason)
+    if "精神" in text:
+        return "mental"
+    if "体調" in text:
+        return "physical"
+    return "other"
+
+
+def load_absence_records(path: str | Path) -> list[tuple[dt.date, str]]:
+    """欠席フォームの回答から、(欠席日, 理由の分類) を日付順で返す。
+
+    同じ日に複数の回答がある場合は、優先度の高い分類（精神的＞体調＞その他）を採用する。
+    """
+    raw = pd.read_excel(path, engine="openpyxl")
+    if COL_ABSENCE_TIMESTAMP not in raw.columns:
+        raise ValueError(f"「{COL_ABSENCE_TIMESTAMP}」列が見つかりません: {path}")
+    timestamps = pd.to_datetime(raw[COL_ABSENCE_TIMESTAMP], errors="coerce")
+    reasons = raw[COL_ABSENCE_REASON] if COL_ABSENCE_REASON in raw.columns else [None] * len(raw)
+
+    category_by_date: dict[dt.date, str] = {}
+    for timestamp, reason in zip(timestamps, reasons, strict=True):
+        if pd.isna(timestamp):
+            continue
+        day, category = timestamp.date(), classify_absence_reason(reason)
+        current = category_by_date.get(day)
+        if current is None or (
+            ABSENCE_CATEGORY_PRIORITY[category] > ABSENCE_CATEGORY_PRIORITY[current]
+        ):
+            category_by_date[day] = category
+    return sorted(category_by_date.items())
 
 
 def find_header_row(path: str | Path) -> int:
