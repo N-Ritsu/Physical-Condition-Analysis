@@ -16,6 +16,9 @@ import pandas as pd
 # 利用者フォルダ内で、ファイル名にこの文字列を含むものを該当ファイルとみなす。
 DAILY_REPORT_KEYWORD = "日報"
 SELFCARE_KEYWORD = "セルフケア"
+ABSENCE_KEYWORD = "欠席"
+# 欠席フォームの回答日時の列。この日付を欠席日として扱う。
+COL_ABSENCE_TIMESTAMP = "タイムスタンプ"
 
 # 元データの列名（Googleフォームの質問文がそのまま列名になっている）
 COL_DATE = "日付"
@@ -139,6 +142,20 @@ def find_user_files(user_dir: str | Path) -> tuple[Path | None, Path | None]:
         _find_excel_by_keyword(user_dir, DAILY_REPORT_KEYWORD),
         _find_excel_by_keyword(user_dir, SELFCARE_KEYWORD),
     )
+
+
+def find_absence_file(user_dir: str | Path) -> Path | None:
+    """利用者フォルダ内から、名前に「欠席」を含むxlsx（欠席フォームの回答）を返す。"""
+    return _find_excel_by_keyword(Path(user_dir), ABSENCE_KEYWORD)
+
+
+def load_absence_dates(path: str | Path) -> list[dt.date]:
+    """欠席フォームの回答から、欠席日（回答日時の日付）を重複なしで返す。"""
+    raw = pd.read_excel(path, engine="openpyxl")
+    if COL_ABSENCE_TIMESTAMP not in raw.columns:
+        raise ValueError(f"「{COL_ABSENCE_TIMESTAMP}」列が見つかりません: {path}")
+    timestamps = pd.to_datetime(raw[COL_ABSENCE_TIMESTAMP], errors="coerce").dropna()
+    return sorted(set(timestamps.dt.date))
 
 
 def find_header_row(path: str | Path) -> int:

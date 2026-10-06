@@ -15,6 +15,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from health_dashboard.attendance import weekly_attendance
 from health_dashboard.data_loader import (
     AXIS_OPTIONS,
     CATEGORICAL_AXIS_COLUMNS,
@@ -25,8 +26,10 @@ from health_dashboard.data_loader import (
     WEATHER_AXIS_COLUMNS,
     attach_condition,
     filter_by_period,
+    find_absence_file,
     find_user_files,
     list_user_dirs,
+    load_absence_dates,
     load_daily_reports,
     load_selfcare_points,
 )
@@ -48,7 +51,7 @@ from health_dashboard.weather import (
 DATA_DIR = Path(__file__).parent / "data"
 WEATHER_CONFIG_PATH = Path(__file__).parent / "weather_config.json"
 PERIOD_OPTIONS = ["直近1週間", "直近1ヶ月", "全期間"]
-DISPLAY_MODE_OPTIONS = ["グラフ", "相関表"]
+DISPLAY_MODE_OPTIONS = ["グラフ", "出席状況", "相関表"]
 
 # 縦軸の選択肢にはないが、相関表には加える項目: (表示名, 列名)。
 # 天気は 雨=0・曇=1・晴=2 に数値化した値、体調ポイントはセルフケアシート由来（高いほど不調）。
@@ -142,6 +145,11 @@ def _apply_date_axis_ticks(fig: go.Figure, dates: list) -> None:
 @st.cache_data
 def _load_data(path_str: str, mtime: float):
     return load_daily_reports(path_str)
+
+
+@st.cache_data
+def _load_absence(path_str: str, mtime: float):
+    return load_absence_dates(path_str)
 
 
 @st.cache_data
@@ -388,6 +396,123 @@ def _correlation_cell_style(r: float) -> str:
     return "background-color: white;"
 
 
+def _format_week_range(start: dt.date, end: dt.date) -> str:
+    return f"{start.month}/{start.day}〜{end.month}/{end.day}"
+
+
+def build_attendance_rate_figure(weekly: pd.DataFrame) -> go.Figure:
+    """週ごとの出席率の推移（1週間＝1点）。"""
+    weeks = [
+        _format_week_range(start, end)
+        for start, end in zip(weekly["week_start"], weekly["week_end"], strict=True)
+    ]
+    fig = go.Figure(
+        go.Scatter(
+            x=weekly["week_start"],
+            y=weekly["attendance_rate"] * 100,
+            mode="lines+markers",
+            line=dict(color="#90a4ae"),
+            marker=dict(size=11, color="#1565c0", line=dict(width=1, color="white")),
+            customdata=list(
+                zip(weeks, weekly["attended_days"], weekly["absent_days"], strict=True)
+            ),
+            hovertemplate=(
+                "%{customdata[0]}（月〜金）<br>出席率: %{y:.0f}%"
+                "<br>出席 %{customdata[1]}日／欠席 %{customdata[2]}日<extra></extra>"
+            ),
+        )
+    )
+    fig.update_layout(
+        margin=dict(l=40, r=20, t=20, b=40),
+        height=360,
+        yaxis_title="出席率（%）",
+        xaxis_title="週の開始日（月曜）",
+        showlegend=False,
+    )
+    fig.update_yaxes(range=[-5, 105], tickvals=[0, 25, 50, 75, 100])
+    fig.update_xaxes(tickformat="%-m/%-d")
+    return fig
+
+
+def build_attendance_score_figure(weekly: pd.DataFrame) -> go.Figure:
+    """週ごとの「出席日数×出席率」の推移（1週間＝1点）。満点は5。"""
+    weeks = [
+        _format_week_range(start, end)
+        for start, end in zip(weekly["week_start"], weekly["week_end"], strict=True)
+    ]
+    fig = go.Figure(
+        go.Scatter(
+            x=weekly["week_start"],
+            y=weekly["attendance_score"],
+            mode="lines+markers",
+            line=dict(color="#90a4ae"),
+            marker=dict(size=11, color="#1565c0", line=dict(width=1, color="white")),
+            customdata=list(
+                zip(
+                    weeks,
+                    weekly["attended_days"],
+                    weekly["absent_days"],
+                    weekly["attendance_rate"] * 100,
+                    strict=True,
+                )
+            ),
+            hovertemplate=(
+                "%{customdata[0]}（月〜金）<br>出席日数×出席率: %{y:.2f}"
+                "<br>出席 %{customdata[1]}日／欠席 %{customdata[2]}日"
+                "（出席率 %{customdata[3]:.0f}%）<extra></extra>"
+            ),
+        )
+    )
+    fig.update_layout(
+        margin=dict(l=40, r=20, t=20, b=40),
+        height=360,
+        yaxis_title="出席日数 × 出席率",
+        xaxis_title="週の開始日（月曜）",
+        showlegend=False,
+    )
+    fig.update_yaxes(range=[-0.25, 5.25], tickvals=[0, 1, 2, 3, 4, 5])
+    fig.update_xaxes(tickformat="%-m/%-d")
+    return fig
+
+
+def render_attendance(df_all: pd.DataFrame, user_dir: Path | None) -> None:
+    st.subheader("出席状況")
+    absence_path = find_absence_file(user_dir) if user_dir else None
+    if absence_path is None:
+        st.info(
+            "欠席のデータ（ファイル名に「欠席」を含むExcel）が見つからないため、"
+            "出席率を計算できません。利用者のフォルダに欠席のファイルを入れてください。"
+        )
+        return
+    try:
+        absent_dates = _load_absence(str(absence_path), absence_path.stat().st_mtime)
+    except ValueError as error:
+        st.warning(f"欠席のデータを読み込めませんでした: {error}")
+        return
+
+    weekly = weekly_attendance(df_all["date"], absent_dates)
+    if weekly.empty:
+        st.warning("1週間（月〜金）が終了した出席・欠席の記録がまだありません。")
+        return
+
+    st.caption(
+        "1週間（月〜金）を1つのデータとして集計しています。出席日数は日報のある日、"
+        "欠席日数は欠席フォームが提出された日（日報のある日を除く）で、出席率は"
+        "「出席日数 ÷（出席日数 + 欠席日数）」です。日報も欠席連絡も無い日（休み・祝日など）は"
+        "含みません。まだ終わっていない最新の週は、半端なデータのため含めていません。"
+        "左のサイドバーの縦軸・期間の選択は、この表示には影響しません。"
+    )
+    st.markdown("#### 出席日数 × 出席率")
+    st.caption(
+        "出席日数に出席率を掛けた値です（満点は5）。欠席した週は、欠席の無い週より"
+        "低くなります。例: 4日出席して欠席なしなら4.0、5日の予定で1日欠席した"
+        "（4日出席・出席率80%）なら3.2。"
+    )
+    st.plotly_chart(build_attendance_score_figure(weekly), use_container_width=True)
+    st.markdown("#### 出席率の推移")
+    st.plotly_chart(build_attendance_rate_figure(weekly), use_container_width=True)
+
+
 def _format_pair_lines(pairs: list[CorrelationPair], label_of: dict[str, str]) -> str:
     if not pairs:
         return "- 該当なし"
@@ -493,6 +618,10 @@ def main() -> None:
         display_mode = st.radio("表示", DISPLAY_MODE_OPTIONS)
         if weather_notice:
             st.caption(weather_notice)
+
+    if display_mode == "出席状況":
+        render_attendance(df_all, user_dir)
+        return
 
     if display_mode == "相関表":
         numeric_axes = [(label, col) for label, col in axes if col not in CATEGORICAL_AXIS_COLUMNS]

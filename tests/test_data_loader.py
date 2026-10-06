@@ -12,8 +12,10 @@ from health_dashboard.data_loader import (
     attach_condition,
     condition_label_from_points,
     filter_by_period,
+    find_absence_file,
     find_user_files,
     list_user_dirs,
+    load_absence_dates,
     load_daily_reports,
     load_selfcare_points,
     normalize_bedtime,
@@ -364,3 +366,39 @@ def test_load_daily_reports_without_mood_type_column(tmp_path):
     df = load_daily_reports(path)
 
     assert df["mood_type"].isna().all()
+
+
+def test_find_absence_file_by_keyword(tmp_path):
+    (tmp_path / "日報.xlsx").write_text("")
+    (tmp_path / "欠席（回答）.xlsx").write_text("")
+
+    assert find_absence_file(tmp_path).name == "欠席（回答）.xlsx"
+
+
+def test_find_absence_file_missing_returns_none(tmp_path):
+    (tmp_path / "日報.xlsx").write_text("")
+
+    assert find_absence_file(tmp_path) is None
+
+
+def test_load_absence_dates_uses_timestamp_date_and_dedups(tmp_path):
+    path = tmp_path / "欠席.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["タイムスタンプ", "欠席理由"])
+    ws.append([dt.datetime(2026, 6, 18, 10, 53, 41), "通院"])
+    ws.append([dt.datetime(2026, 6, 18, 18, 0, 0), "通院"])  # 同じ日の再提出
+    ws.append([dt.datetime(2026, 6, 24, 12, 0, 8), "体調不良"])
+    wb.save(path)
+
+    assert load_absence_dates(path) == [dt.date(2026, 6, 18), dt.date(2026, 6, 24)]
+
+
+def test_load_absence_dates_without_timestamp_column_raises(tmp_path):
+    path = tmp_path / "欠席.xlsx"
+    wb = openpyxl.Workbook()
+    wb.active.append(["日付", "欠席理由"])
+    wb.save(path)
+
+    with pytest.raises(ValueError, match="タイムスタンプ"):
+        load_absence_dates(path)
