@@ -32,6 +32,8 @@ _CLOUDY_MIN_PERCENT = 60.0  # 雨・雪でない日で、平均雲量がこれ�
 
 WEATHER_COLUMNS = ["pressure_hpa", "pressure_change_hpa", "weather_label"]
 WEATHER_ORDER = ["晴", "曇", "雨", "雪"]
+# 相関の算出用に天気を数値化する対応（良い天気ほど大きい）。雪は順序づけが難しいため対象外。
+WEATHER_SCORE = {"雨": 0, "曇": 1, "晴": 2}
 
 
 def classify_weather(
@@ -136,5 +138,7 @@ def attach_weather(df: pd.DataFrame, weather_df: pd.DataFrame | None) -> pd.Data
         result["pressure_hpa"] = float("nan")
         result["pressure_change_hpa"] = float("nan")
         result["weather_label"] = None
-        return result
-    return df.merge(weather_df[["date", *WEATHER_COLUMNS]], on="date", how="left")
+    else:
+        result = df.merge(weather_df[["date", *WEATHER_COLUMNS]], on="date", how="left")
+    result["weather_score"] = result["weather_label"].map(WEATHER_SCORE).astype(float)
+    return result

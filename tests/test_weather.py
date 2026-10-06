@@ -82,6 +82,7 @@ def test_attach_weather_merges_by_date():
 
     assert merged.loc[0, "pressure_hpa"] == 1010.0
     assert merged.loc[0, "weather_label"] == "晴"
+    assert merged.loc[0, "weather_score"] == 2  # 雨=0・曇=1・晴=2
     assert pd.isna(merged.loc[1, "pressure_hpa"])  # 気象データが無い日は空
     assert len(merged) == 2
 
@@ -94,6 +95,7 @@ def test_attach_weather_none_adds_empty_columns():
     assert result["pressure_hpa"].isna().all()
     assert result["pressure_change_hpa"].isna().all()
     assert result["weather_label"].isna().all()
+    assert result["weather_score"].isna().all()
     assert result["pressure_hpa"].dtype == float
 
 
@@ -165,3 +167,20 @@ def test_fetch_weather_sends_only_rounded_location_and_dates():
     }
     assert captured["timeout"] > 0
     assert len(result) == 2
+
+
+def test_attach_weather_score_mapping_and_snow_excluded():
+    df = pd.DataFrame({"date": [dt.date(2026, 1, d) for d in range(1, 5)]})
+    weather = pd.DataFrame(
+        {
+            "date": df["date"],
+            "pressure_hpa": [1000.0] * 4,
+            "pressure_change_hpa": [0.0] * 4,
+            "weather_label": ["雨", "曇", "晴", "雪"],
+        }
+    )
+
+    merged = attach_weather(df, weather)
+
+    assert merged["weather_score"].iloc[:3].tolist() == [0, 1, 2]
+    assert pd.isna(merged["weather_score"].iloc[3])

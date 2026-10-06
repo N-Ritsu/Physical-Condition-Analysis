@@ -43,6 +43,15 @@ WEATHER_CONFIG_PATH = Path(__file__).parent / "weather_config.json"
 PERIOD_OPTIONS = ["直近1週間", "直近1ヶ月", "全期間"]
 DISPLAY_MODE_OPTIONS = ["グラフ", "相関表"]
 
+# 縦軸の選択肢にはないが、相関表には加える項目: (表示名, 列名)。
+# 天気は 雨=0・曇=1・晴=2 に数値化した値、体調ポイントはセルフケアシート由来（高いほど不調）。
+_CORRELATION_EXTRA_AXES = [
+    ("天気（雨0・曇1・晴2）", "weather_score"),
+    ("体調", "condition_points"),
+]
+
+_WEATHER_CORRELATION_COLUMNS = WEATHER_AXIS_COLUMNS | {"weather_score"}
+
 # 相関係数の絶対値に対する強さの判定基準。
 _CORRELATION_STRONG_THRESHOLD = 0.6
 _CORRELATION_MODERATE_THRESHOLD = 0.3
@@ -347,8 +356,22 @@ def render_correlation_table(df: pd.DataFrame, axes: list[tuple[str, str]]) -> N
 
     axis_labels = [label for label, _ in axes]
     axis_cols = [col for _, col in axes]
+    if "weather_score" in axis_cols:
+        st.caption(
+            "天気は 雨=0・曇=1・晴=2 に置き換えて計算しています（雪の日は対象外）。"
+            "数値が大きいほど天気が良い日です。気圧・天気どうしの組み合わせは対象外（―）です。"
+        )
+    if "condition_points" in axis_cols:
+        st.caption(
+            "体調はセルフケアシート由来の点数（体調ポイント）で、高いほど不調を表します。"
+            "そのため、睡眠の質・気分などとは「マイナス」の相関が、"
+            "中途覚醒回数とは「プラス」の相関が、悪い状態の連動を示します。"
+        )
 
     matrix = correlation_matrix(df, axis_cols)
+    # 気圧・天気どうしの相関は、利用者の状態を知る手がかりにならないため対象外（―）にする。
+    weather_cols = [col for col in axis_cols if col in _WEATHER_CORRELATION_COLUMNS]
+    matrix.loc[weather_cols, weather_cols] = float("nan")
     matrix.index = axis_labels
     matrix.columns = axis_labels
 
@@ -387,7 +410,10 @@ def main() -> None:
             st.caption(weather_notice)
 
     if display_mode == "相関表":
-        render_correlation_table(df_all, axes)
+        correlation_axes = axes + [
+            (label, col) for label, col in _CORRELATION_EXTRA_AXES if df_all[col].notna().any()
+        ]
+        render_correlation_table(df_all, correlation_axes)
         return
 
     df = filter_by_period(df_all, period_label)
