@@ -211,14 +211,24 @@ def build_figure(df, axis_label: str, axis_col: str) -> go.Figure:
 
 def render_condition_legend() -> None:
     order = ("良好", "普通", "注意", "警戒", "異常")
+    # 「× 注意」「× 警戒」「× 異常」「× 記録なし」は記号だけでは見分けにくいため、
+    # マーカーと同じ色を凡例のテキストにも付けて区別できるようにする。
+    legend_items = [
+        f'<span style="color:{_CONDITION_STYLE[k]["color"]}">{_CONDITION_STYLE[k]["label"]}</span>'
+        for k in order
+    ]
+    legend_items.append(
+        f'<span style="color:{_CONDITION_DEFAULT_STYLE["color"]}">'
+        f'{_CONDITION_DEFAULT_STYLE["label"]}</span>'
+    )
     st.caption(
         "マーカー（体調・セルフケアシート由来）: "
-        + "　".join(_CONDITION_STYLE[k]["label"] for k in order)
-        + f"　{_CONDITION_DEFAULT_STYLE['label']}"
+        + "　".join(legend_items)
         + f"（0pt=良好、1〜{CONDITION_CAUTION_POINTS - 1}pt=普通、"
         + f"{CONDITION_CAUTION_POINTS}pt=注意、{CONDITION_WARNING_POINTS}pt=警戒、"
         + f"{CONDITION_ABNORMAL_THRESHOLD}pt以上=異常。"
-        + "セルフケアシートに記録がない日は早退等の可能性を示す黒い×で表示）"
+        + "セルフケアシートに記録がない日は早退等の可能性を示す黒い×で表示）",
+        unsafe_allow_html=True,
     )
 
 

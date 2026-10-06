@@ -101,6 +101,21 @@ def _write_sample_workbook(path):
             6.0,
         ]
     )
+    ws.append(
+        [
+            None,
+            dt.datetime(2026, 6, 5),
+            "金",
+            dt.time(9, 0),
+            "目標C",
+            dt.time(0, 30),  # 日付をまたいだ後の就寝（正規化されずそのまま0:30扱い）
+            dt.time(7, 0),
+            "7時間",
+            "良好",
+            6.0,
+            7.0,
+        ]
+    )
     wb.save(path)
 
 
@@ -110,8 +125,8 @@ def test_load_daily_reports(tmp_path):
 
     df = load_daily_reports(path)
 
-    assert len(df) == 2
-    assert list(df["date"]) == [dt.date(2026, 5, 28), dt.date(2026, 6, 4)]
+    assert len(df) == 3
+    assert list(df["date"]) == [dt.date(2026, 5, 28), dt.date(2026, 6, 4), dt.date(2026, 6, 5)]
     # 就寝9:30 -> 21:30として解釈される（12時台以降なのでそのままの数値軸）
     assert df.loc[0, "bedtime_hours"] == pytest.approx(21.5)
     assert df.loc[0, "quality_label"] == "悪い"
@@ -120,6 +135,10 @@ def test_load_daily_reports(tmp_path):
     assert df.loc[1, "night_awakenings"] == 0
     assert df.loc[0, "mood_wake"] == 3.0
     assert df.loc[0, "mood_commute"] == 8.0
+    # 就寝21:30(21.5) -> 起床6:50(6.83..) は9時間20分（9.33...時間）
+    assert df.loc[0, "sleep_duration_hours"] == pytest.approx(9 + 20 / 60)
+    # 就寝0:30(日付またぎ後、24.5) -> 起床7:00(7.0) は6時間30分
+    assert df.loc[2, "sleep_duration_hours"] == pytest.approx(6.5)
 
 
 def _write_selfcare_workbook(path, sheet_specs):

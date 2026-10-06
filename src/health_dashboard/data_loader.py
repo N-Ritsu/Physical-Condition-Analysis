@@ -54,6 +54,7 @@ CONDITION_ABNORMAL_THRESHOLD = 5  # 5点以上 = 異常
 AXIS_OPTIONS: list[tuple[str, str]] = [
     ("入眠時間", "bedtime_hours"),
     ("起床時間", "wake_hours"),
+    ("睡眠時間", "sleep_duration_hours"),
     ("睡眠の質", "quality_score"),
     ("中途覚醒回数", "night_awakenings"),
     ("気分（起床時）", "mood_wake"),
@@ -68,6 +69,7 @@ AXIS_OPTIONS: list[tuple[str, str]] = [
 AXIS_DIRECTION: dict[str, str] = {
     "bedtime_hours": "none",
     "wake_hours": "none",
+    "sleep_duration_hours": "none",
     "quality_score": "higher",
     "night_awakenings": "lower",
     "mood_wake": "higher",
@@ -173,7 +175,7 @@ def load_daily_reports(path: str | Path) -> pd.DataFrame:
     """日報Excelを読み込み、分析・グラフ化用に整形したDataFrameを返す。
 
     戻り値の主な列:
-        date, bedtime, bedtime_hours, wake_time, wake_hours,
+        date, bedtime, bedtime_hours, wake_time, wake_hours, sleep_duration_hours,
         quality_label, quality_score, night_awakenings,
         mood_wake, mood_commute
     """
@@ -196,6 +198,10 @@ def load_daily_reports(path: str | Path) -> pd.DataFrame:
     wake_time = raw[COL_WAKE].map(_coerce_time)
     df["wake_time"] = wake_time
     df["wake_hours"] = wake_time.map(time_to_hours)
+
+    # bedtime_hoursは就寝時刻の連続数値軸（18〜29.99）、wake_hoursは起床時刻（0〜23.99）
+    # のため、+24すると常に「その夜の就寝から翌朝の起床まで」の差分になる。
+    df["sleep_duration_hours"] = df["wake_hours"] - df["bedtime_hours"] + 24
 
     quality_parsed = raw[COL_QUALITY].map(parse_sleep_quality)
     df["quality_label"] = quality_parsed.map(lambda t: t[0])

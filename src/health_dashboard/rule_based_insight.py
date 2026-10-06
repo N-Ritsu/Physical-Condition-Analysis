@@ -57,6 +57,7 @@ from health_dashboard.insight_context import build_context
 _STABLE_THRESHOLD: dict[str, float] = {
     "bedtime_hours": 0.5,
     "wake_hours": 0.5,
+    "sleep_duration_hours": 0.5,
     "quality_score": 0.5,
     "night_awakenings": 1.0,
     "mood_wake": 0.5,

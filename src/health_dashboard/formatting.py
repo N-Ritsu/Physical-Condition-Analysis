@@ -30,4 +30,6 @@ def format_axis_value(axis_col: str, value: float | None) -> str:
         return QUALITY_SCORE_LABELS.get(round(value), f"{value:.1f}")
     if axis_col == "night_awakenings":
         return f"{value:.1f}回"
+    if axis_col == "sleep_duration_hours":
+        return f"{value:.1f}時間"
     return f"{value:.1f}"
