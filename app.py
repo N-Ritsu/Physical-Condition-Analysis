@@ -95,14 +95,14 @@ _CONDITION_STYLE = {
     "普通": {"symbol": "triangle-up", "color": "#2e7d32", "label": "△ 普通"},
     "注意": {"symbol": "x", "color": "#fb8c00", "label": "× 注意"},
     "警戒": {"symbol": "x", "color": "#c62828", "label": "× 警戒"},
-    "異常": {"symbol": "x", "color": "#6a1b9a", "label": "× 異常"},
+    "異常": {"symbol": "x", "color": "#000000", "label": "× 異常"},
 }
 # セルフケアシートに記録がない日（日報はあるがセルフケアの記入がない日）。
-# 早退などにより記入できなかった可能性を示すサインとして、黒い×で表示する。
+# 早退などにより記入できなかった可能性を示すサインとして、黒い□で表示する。
 _CONDITION_DEFAULT_STYLE = {
-    "symbol": "x",
+    "symbol": "square-open",
     "color": "#000000",
-    "label": "× 記録なし（早退等の可能性）",
+    "label": "□ 記録なし（早退等の可能性）",
 }
 
 # 悪化ボーダーの横線の色。体調が×になる割合: 90%=赤、80%=黄、70%=青。
@@ -392,8 +392,8 @@ def build_figure(
 
 def render_condition_legend() -> None:
     order = ("良好", "普通", "注意", "警戒", "異常")
-    # 「× 注意」「× 警戒」「× 異常」「× 記録なし」は記号だけでは見分けにくいため、
-    # マーカーと同じ色を凡例のテキストにも付けて区別できるようにする。
+    # 「× 注意」「× 警戒」「× 異常」は記号が同じで色だけが違うため、マーカーと同じ色を
+    # 凡例のテキストにも付けて区別できるようにする。
     legend_items = [
         f'<span style="color:{_CONDITION_STYLE[k]["color"]}">{_CONDITION_STYLE[k]["label"]}</span>'
         for k in order
@@ -408,7 +408,7 @@ def render_condition_legend() -> None:
         + f"（0pt=良好、1〜{CONDITION_CAUTION_POINTS - 1}pt=普通、"
         + f"{CONDITION_CAUTION_POINTS}pt=注意、{CONDITION_WARNING_POINTS}pt=警戒、"
         + f"{CONDITION_ABNORMAL_THRESHOLD}pt以上=異常。"
-        + "セルフケアシートに記録がない日は早退等の可能性を示す黒い×で表示）",
+        + "セルフケアシートに記録がない日は早退等の可能性を示す黒い□で表示）",
         unsafe_allow_html=True,
     )
 
