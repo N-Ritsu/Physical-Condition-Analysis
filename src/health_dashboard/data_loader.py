@@ -65,7 +65,12 @@ AXIS_OPTIONS: list[tuple[str, str]] = [
     ("中途覚醒回数", "night_awakenings"),
     ("気分（起床時）", "mood_wake"),
     ("気分（通所時）", "mood_commute"),
+    # 気象データ（weather.py）。気象の設定が無い場合は値が空になり、画面では選択肢から外れる。
+    ("気圧（日平均）", "pressure_hpa"),
+    ("気圧（前日差）", "pressure_change_hpa"),
 ]
+# 利用者の状態ではなく外部の気象データを表す軸（振り返りコメントの対象外）。
+WEATHER_AXIS_COLUMNS = frozenset({"pressure_hpa", "pressure_change_hpa"})
 
 # 各軸の「良し悪しの方向性」。安定度（ばらつき）の評価とは別に、平均値の増減を
 # どう解釈するかを表す振り返りコメント生成用のメタデータ。
@@ -80,6 +85,8 @@ AXIS_DIRECTION: dict[str, str] = {
     "night_awakenings": "lower",
     "mood_wake": "higher",
     "mood_commute": "higher",
+    "pressure_hpa": "none",
+    "pressure_change_hpa": "none",
 }
 
 

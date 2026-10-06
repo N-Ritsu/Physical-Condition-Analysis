@@ -20,6 +20,7 @@ from health_dashboard.data_loader import (
     CONDITION_ABNORMAL_THRESHOLD,
     CONDITION_CAUTION_POINTS,
     CONDITION_WARNING_POINTS,
+    WEATHER_AXIS_COLUMNS,
     attach_condition,
     filter_by_period,
     find_user_files,
@@ -27,11 +28,18 @@ from health_dashboard.data_loader import (
     load_daily_reports,
     load_selfcare_points,
 )
-from health_dashboard.formatting import format_clock
+from health_dashboard.formatting import format_axis_value, format_clock
 from health_dashboard.rule_based_insight import generate_rule_based_insight
 from health_dashboard.stats import correlation_matrix, summarize
+from health_dashboard.weather import (
+    WEATHER_ORDER,
+    attach_weather,
+    fetch_weather,
+    load_weather_location,
+)
 
 DATA_DIR = Path(__file__).parent / "data"
+WEATHER_CONFIG_PATH = Path(__file__).parent / "weather_config.json"
 PERIOD_OPTIONS = ["直近1週間", "直近1ヶ月", "全期間"]
 DISPLAY_MODE_OPTIONS = ["グラフ", "相関表"]
 
@@ -119,6 +127,29 @@ def _load_selfcare(path_str: str, mtime: float):
     return load_selfcare_points(path_str)
 
 
+@st.cache_data(ttl=6 * 60 * 60, show_spinner=False)
+def _fetch_weather_cached(latitude: float, longitude: float, start: dt.date, end: dt.date):
+    # 失敗時は例外を投げ、結果をキャッシュさせない（次回の操作で再取得できるようにする）。
+    return fetch_weather(latitude, longitude, start, end)
+
+
+def _attach_weather_to(df: pd.DataFrame) -> tuple[pd.DataFrame, str | None]:
+    """気象データを結合する。取得できなかった場合は、サイドバーに出す案内文も返す。"""
+    location = load_weather_location(WEATHER_CONFIG_PATH)
+    if location is None:
+        return attach_weather(df, None), (
+            "気圧・天気は未設定です。weather_config.json に施設の緯度・経度を"
+            "書くと表示できます。"
+        )
+    try:
+        weather_df = _fetch_weather_cached(*location, min(df["date"]), max(df["date"]))
+    except Exception:
+        return attach_weather(df, None), (
+            "気象データを取得できませんでした。インターネット接続を確認してください。"
+        )
+    return attach_weather(df, weather_df), None
+
+
 def load_source_dataframe(user_dir: Path | None):
     daily_path, selfcare_path = find_user_files(user_dir) if user_dir else (None, None)
 
@@ -150,7 +181,7 @@ def load_source_dataframe(user_dir: Path | None):
         )
         df["condition_points"] = None
         df["condition_label"] = None
-    return df
+    return _attach_weather_to(df)
 
 
 def _condition_hover_text(label, points) -> str:
@@ -170,6 +201,8 @@ def build_figure(df, axis_label: str, axis_col: str) -> go.Figure:
         for label, points in zip(df["condition_label"], df["condition_points"], strict=False)
     ]
 
+    hover_weather = [label if isinstance(label, str) else "―" for label in df["weather_label"]]
+
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
@@ -183,8 +216,11 @@ def build_figure(df, axis_label: str, axis_col: str) -> go.Figure:
                 color=[s["color"] for s in styles],
                 line=dict(width=1, color="white"),
             ),
-            customdata=hover_condition,
-            hovertemplate="%{x|%-m/%-d}<br>値: %{y}<br>体調: %{customdata}<extra></extra>",
+            customdata=list(zip(hover_condition, hover_weather, strict=True)),
+            hovertemplate=(
+                "%{x|%-m/%-d}<br>値: %{y}<br>体調: %{customdata[0]}"
+                "<br>天気: %{customdata[1]}<extra></extra>"
+            ),
             name=axis_label,
         )
     )
@@ -245,8 +281,37 @@ def render_stats(df, axis_col: str) -> None:
     cols[4].metric("ばらつき（標準偏差）", f"{s.std:.2f}" if s.std is not None else "―")
 
 
+def render_weather_breakdown(df, axis_col: str, axis_label: str) -> None:
+    """選択中の項目を、天気（晴/曇/雨/雪）ごとに平均して並べる。"""
+    grouped = df.groupby("weather_label")[axis_col].agg(["count", "mean"])
+    grouped = grouped[grouped["count"] > 0]
+    if grouped.empty:
+        return
+    rows = [
+        {
+            "天気": label,
+            "日数": int(grouped.loc[label, "count"]),
+            f"{axis_label}の平均": format_axis_value(axis_col, grouped.loc[label, "mean"]),
+        }
+        for label in WEATHER_ORDER
+        if label in grouped.index
+    ]
+    st.subheader("天気ごとの平均")
+    st.caption(
+        "表示中の期間を、その日の天気で分けた平均です。日数が少ない天気は参考程度に"
+        "ご覧ください。天気は気象データ上の区分で、あくまで傾向の確認用です。"
+    )
+    st.table(pd.DataFrame(rows).set_index("天気"))
+
+
 def render_insight(df, axis_col: str, axis_label: str, period_label: str) -> None:
     st.subheader("振り返りコメント")
+    if axis_col in WEATHER_AXIS_COLUMNS:
+        st.info(
+            f"{axis_label}は利用者の状態ではなく天候の値のため、振り返りコメントは"
+            "表示しません。睡眠や気分との関連は「相関表」で確認できます。"
+        )
+        return
     st.caption(
         "※ 医学的な診断は行いません。あくまで傾向の提示と、面談での対話のきっかけを"
         "提案するための参考コメントです。"
@@ -266,7 +331,7 @@ def _correlation_cell_style(r: float) -> str:
     return "background-color: white;"
 
 
-def render_correlation_table(df: pd.DataFrame) -> None:
+def render_correlation_table(df: pd.DataFrame, axes: list[tuple[str, str]]) -> None:
     st.subheader("相関表")
     st.caption(
         "すべてのデータ期間（全期間）を使って算出したピアソン相関係数です。"
@@ -280,8 +345,8 @@ def render_correlation_table(df: pd.DataFrame) -> None:
         "医学的な判断は行わず、面談で気になる組み合わせを話題にする際の参考としてください。"
     )
 
-    axis_labels = [label for label, _ in AXIS_OPTIONS]
-    axis_cols = [col for _, col in AXIS_OPTIONS]
+    axis_labels = [label for label, _ in axes]
+    axis_cols = [col for _, col in axes]
 
     matrix = correlation_matrix(df, axis_cols)
     matrix.index = axis_labels
@@ -296,7 +361,11 @@ def render_correlation_table(df: pd.DataFrame) -> None:
 def main() -> None:
     st.set_page_config(page_title="体調・睡眠分析ダッシュボード", layout="wide")
     st.title("体調・睡眠分析ダッシュボード")
-    st.caption("すべてのデータ処理はローカルPC内で完結し、外部には一切送信されません。")
+    st.caption(
+        "利用者の日報・セルフケアのデータはローカルPC内で処理し、外部には送信しません。"
+        "気象データを設定した場合のみ、施設の位置（緯度経度）と日付範囲を気象API"
+        "（Open-Meteo）に送信して気圧・天気を取得します。"
+    )
 
     user_dirs = list_user_dirs(DATA_DIR)
     with st.sidebar:
@@ -305,16 +374,20 @@ def main() -> None:
             st.selectbox("利用者", user_dirs, format_func=lambda p: p.name) if user_dirs else None
         )
 
-    df_all = load_source_dataframe(user_dir)
+    df_all, weather_notice = load_source_dataframe(user_dir)
+    # 気象データが無い場合は、気象の軸を選択肢・相関表から外す。
+    axes = [(label, col) for label, col in AXIS_OPTIONS if df_all[col].notna().any()]
 
     with st.sidebar:
-        axis_label = st.radio("縦軸（表示する項目）", [label for label, _ in AXIS_OPTIONS])
-        axis_col = dict(AXIS_OPTIONS)[axis_label]
+        axis_label = st.radio("縦軸（表示する項目）", [label for label, _ in axes])
+        axis_col = dict(axes)[axis_label]
         period_label = st.radio("期間", PERIOD_OPTIONS, index=1)
         display_mode = st.radio("表示", DISPLAY_MODE_OPTIONS)
+        if weather_notice:
+            st.caption(weather_notice)
 
     if display_mode == "相関表":
-        render_correlation_table(df_all)
+        render_correlation_table(df_all, axes)
         return
 
     df = filter_by_period(df_all, period_label)
@@ -328,6 +401,8 @@ def main() -> None:
     render_condition_legend()
 
     render_stats(df, axis_col)
+    if axis_col not in WEATHER_AXIS_COLUMNS:
+        render_weather_breakdown(df, axis_col, axis_label)
     st.divider()
     render_insight(df, axis_col, axis_label, period_label)
 
