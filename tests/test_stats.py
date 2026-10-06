@@ -1,7 +1,12 @@
 import pandas as pd
 import pytest
 
-from health_dashboard.stats import correlation, correlation_matrix, summarize
+from health_dashboard.stats import (
+    correlation,
+    correlation_matrix,
+    correlation_pairs_by_strength,
+    summarize,
+)
 
 
 def test_summarize_basic():
@@ -68,3 +73,56 @@ def test_correlation_matrix_insufficient_data_is_nan():
     matrix = correlation_matrix(df, ["a", "b"])
 
     assert pd.isna(matrix.loc["a", "b"])
+
+
+def _matrix():
+    names = ["a", "b", "c", "d"]
+    values = {
+        ("a", "b"): 0.9,  # 強い
+        ("a", "c"): -0.7,  # 強い（負の相関）
+        ("a", "d"): 0.4,  # 中程度
+        ("b", "c"): -0.35,  # 中程度（負の相関）
+        ("b", "d"): 0.1,  # ほぼ無関係
+        ("c", "d"): float("nan"),  # データ不足
+    }
+    matrix = pd.DataFrame(float("nan"), index=names, columns=names)
+    for (x, y), v in values.items():
+        matrix.loc[x, y] = v
+        matrix.loc[y, x] = v
+    return matrix
+
+
+def test_correlation_pairs_grouped_and_sorted_by_strength():
+    groups = correlation_pairs_by_strength(_matrix(), 0.6, 0.3)
+
+    assert [(p.first, p.second) for p in groups["strong"]] == [("a", "b"), ("a", "c")]
+    assert [(p.first, p.second) for p in groups["moderate"]] == [("a", "d"), ("b", "c")]
+    assert [(p.first, p.second) for p in groups["weak"]] == [("b", "d")]
+
+
+def test_correlation_pairs_skip_nan_and_each_pair_once():
+    groups = correlation_pairs_by_strength(_matrix(), 0.6, 0.3)
+
+    all_pairs = [frozenset({p.first, p.second}) for g in groups.values() for p in g]
+    assert frozenset({"c", "d"}) not in all_pairs  # NaNは除く
+    assert len(all_pairs) == len(set(all_pairs)) == 5
+
+
+def test_correlation_pairs_exclude():
+    groups = correlation_pairs_by_strength(_matrix(), 0.6, 0.3, exclude={frozenset({"a", "b"})})
+
+    assert [(p.first, p.second) for p in groups["strong"]] == [("a", "c")]
+
+
+def test_correlation_pairs_boundary_values_go_to_stronger_group():
+    matrix = pd.DataFrame(
+        [[float("nan"), 0.6, 0.3], [0.6, float("nan"), 0.29], [0.3, 0.29, float("nan")]],
+        index=["a", "b", "c"],
+        columns=["a", "b", "c"],
+    )
+
+    groups = correlation_pairs_by_strength(matrix, 0.6, 0.3)
+
+    assert [(p.first, p.second) for p in groups["strong"]] == [("a", "b")]
+    assert [(p.first, p.second) for p in groups["moderate"]] == [("a", "c")]
+    assert [(p.first, p.second) for p in groups["weak"]] == [("b", "c")]

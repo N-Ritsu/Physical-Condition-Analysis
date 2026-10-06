@@ -51,3 +51,42 @@ def correlation_matrix(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
         for col in columns:
             matrix.loc[row, col] = float("nan") if row == col else correlation(df, row, col)
     return matrix
+
+
+@dataclass
+class CorrelationPair:
+    first: str
+    second: str
+    r: float
+
+
+def correlation_pairs_by_strength(
+    matrix: pd.DataFrame,
+    strong_threshold: float,
+    moderate_threshold: float,
+    exclude: set[frozenset[str]] | None = None,
+) -> dict[str, list[CorrelationPair]]:
+    """相関行列を、組み合わせ（上三角のみ）ごとに強さで3グループに分ける。
+
+    戻り値のキーは "strong"（|r|が強いしきい値以上）、"moderate"（中程度以上）、
+    "weak"（それ未満）。各グループは|r|の大きい順。NaN（対角線・データ不足・
+    対象外）の組み合わせと、excludeに含まれる組み合わせは除く。
+    """
+    exclude = exclude or set()
+    groups: dict[str, list[CorrelationPair]] = {"strong": [], "moderate": [], "weak": []}
+    names = list(matrix.index)
+    for i, first in enumerate(names):
+        for second in names[i + 1 :]:
+            r = matrix.loc[first, second]
+            if pd.isna(r) or frozenset({first, second}) in exclude:
+                continue
+            if abs(r) >= strong_threshold:
+                key = "strong"
+            elif abs(r) >= moderate_threshold:
+                key = "moderate"
+            else:
+                key = "weak"
+            groups[key].append(CorrelationPair(first, second, float(r)))
+    for pairs in groups.values():
+        pairs.sort(key=lambda p: abs(p.r), reverse=True)
+    return groups

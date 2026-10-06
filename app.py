@@ -32,7 +32,12 @@ from health_dashboard.data_loader import (
 )
 from health_dashboard.formatting import format_axis_value, format_clock
 from health_dashboard.rule_based_insight import generate_rule_based_insight
-from health_dashboard.stats import correlation_matrix, summarize
+from health_dashboard.stats import (
+    CorrelationPair,
+    correlation_matrix,
+    correlation_pairs_by_strength,
+    summarize,
+)
 from health_dashboard.weather import (
     WEATHER_ORDER,
     attach_weather,
@@ -53,6 +58,12 @@ _CORRELATION_EXTRA_AXES = [
 ]
 
 _WEATHER_CORRELATION_COLUMNS = WEATHER_AXIS_COLUMNS | {"weather_score"}
+# 睡眠時間は入眠時間・起床時間から計算した値で、この2つとの相関は当然高くなるため、
+# 「結局何が言いたいの？」のまとめからは外す（表には表示する）。
+_DERIVED_CORRELATION_PAIRS = {
+    frozenset({"sleep_duration_hours", "bedtime_hours"}),
+    frozenset({"sleep_duration_hours", "wake_hours"}),
+}
 
 # 相関係数の絶対値に対する強さの判定基準。
 _CORRELATION_STRONG_THRESHOLD = 0.6
@@ -377,6 +388,34 @@ def _correlation_cell_style(r: float) -> str:
     return "background-color: white;"
 
 
+def _format_pair_lines(pairs: list[CorrelationPair], label_of: dict[str, str]) -> str:
+    if not pairs:
+        return "- 該当なし"
+    return "\n".join(f"- {label_of[p.first]}　と　{label_of[p.second]}" for p in pairs)
+
+
+def render_correlation_summary(
+    pairs_by_strength: dict[str, list[CorrelationPair]], label_of: dict[str, str]
+) -> None:
+    """相関表の内容を、関係の強さごとの組み合わせとして文章で言い換える。"""
+    st.subheader("結局何が言いたいの？")
+    st.caption(
+        "上の表を、関係の強さごとに言い換えたものです。睡眠時間と、入眠時間・起床時間の"
+        "組み合わせは、計算で求めた値どうしのため除いています。データが足りない"
+        "組み合わせも含みません。"
+    )
+
+    st.markdown("#### → 関係性が強いもの同士")
+    st.markdown(_format_pair_lines(pairs_by_strength["strong"], label_of))
+    st.markdown("#### → 少し関係があるもの同士")
+    st.markdown(_format_pair_lines(pairs_by_strength["moderate"], label_of))
+
+    weak = pairs_by_strength["weak"]
+    st.markdown("#### → ほとんど関係がないもの同士")
+    with st.expander(f"{len(weak)}組を表示"):
+        st.markdown(_format_pair_lines(weak, label_of))
+
+
 def render_correlation_table(df: pd.DataFrame, axes: list[tuple[str, str]]) -> None:
     st.subheader("相関表")
     st.caption(
@@ -409,6 +448,13 @@ def render_correlation_table(df: pd.DataFrame, axes: list[tuple[str, str]]) -> N
     # 気圧・天気どうしの相関は、利用者の状態を知る手がかりにならないため対象外（―）にする。
     weather_cols = [col for col in axis_cols if col in _WEATHER_CORRELATION_COLUMNS]
     matrix.loc[weather_cols, weather_cols] = float("nan")
+    pairs_by_strength = correlation_pairs_by_strength(
+        matrix,
+        _CORRELATION_STRONG_THRESHOLD,
+        _CORRELATION_MODERATE_THRESHOLD,
+        exclude=_DERIVED_CORRELATION_PAIRS,
+    )
+    label_of = dict(zip(axis_cols, axis_labels, strict=True))
     matrix.index = axis_labels
     matrix.columns = axis_labels
 
@@ -416,6 +462,8 @@ def render_correlation_table(df: pd.DataFrame, axes: list[tuple[str, str]]) -> N
     # st.dataframe（対話型グリッド）はStylerのna_repを無視してNaNを"None"と
     # 表示してしまうため、Styler全体を静的HTMLとして描画するst.tableを使う。
     st.table(styled)
+
+    render_correlation_summary(pairs_by_strength, label_of)
 
 
 def main() -> None:
