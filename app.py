@@ -25,6 +25,10 @@ from health_dashboard.border_analysis import (
     find_bad_borders,
     heaviest_border_exceeded,
 )
+from health_dashboard.condition_scheme import (
+    ConditionScheme,
+    apply_condition_scheme,
+)
 from health_dashboard.data_loader import (
     AXIS_DIRECTION,
     AXIS_OPTIONS,
@@ -66,6 +70,7 @@ from health_dashboard.weather import (
 
 DATA_DIR = Path(__file__).parent / "data"
 WEATHER_CONFIG_PATH = Path(__file__).parent / "weather_config.json"
+CONDITION_MODE_OPTIONS = ["個人ごとに自動で均等に分ける", "固定（点数の基準）"]
 PERIOD_OPTIONS = ["直近1週間", "直近1ヶ月", "全期間"]
 DISPLAY_MODE_OPTIONS = ["グラフ", "出席状況", "相関表"]
 
@@ -390,7 +395,17 @@ def build_figure(
     return fig
 
 
-def render_condition_legend() -> None:
+def _condition_threshold_text(scheme: ConditionScheme | None) -> str:
+    if scheme is None:
+        return (
+            f"0pt=良好、1〜{CONDITION_CAUTION_POINTS - 1}pt=普通、"
+            f"{CONDITION_CAUTION_POINTS}pt=注意、{CONDITION_WARNING_POINTS}pt=警戒、"
+            f"{CONDITION_ABNORMAL_THRESHOLD}pt以上=異常"
+        )
+    return "、".join(f"{points}={label}" for label, points in scheme.describe())
+
+
+def render_condition_legend(scheme: ConditionScheme | None = None) -> None:
     order = ("良好", "普通", "注意", "警戒", "異常")
     # 「× 注意」「× 警戒」「× 異常」は記号が同じで色だけが違うため、マーカーと同じ色を
     # 凡例のテキストにも付けて区別できるようにする。
@@ -405,9 +420,7 @@ def render_condition_legend() -> None:
     st.caption(
         "マーカー（体調・セルフケアシート由来）: "
         + "　".join(legend_items)
-        + f"（0pt=良好、1〜{CONDITION_CAUTION_POINTS - 1}pt=普通、"
-        + f"{CONDITION_CAUTION_POINTS}pt=注意、{CONDITION_WARNING_POINTS}pt=警戒、"
-        + f"{CONDITION_ABNORMAL_THRESHOLD}pt以上=異常。"
+        + f"（{_condition_threshold_text(scheme)}。"
         + "セルフケアシートに記録がない日は早退等の可能性を示す黒い□で表示）",
         unsafe_allow_html=True,
     )
@@ -784,8 +797,17 @@ def main() -> None:
         axis_col = dict(axes)[axis_label]
         period_label = st.radio("期間", PERIOD_OPTIONS, index=1)
         display_mode = st.radio("表示", DISPLAY_MODE_OPTIONS)
+        condition_mode = st.radio("体調マーカーの区切り", CONDITION_MODE_OPTIONS)
         if weather_notice:
             st.caption(weather_notice)
+
+    condition_scheme = None
+    if condition_mode == CONDITION_MODE_OPTIONS[0]:
+        df_all, condition_scheme = apply_condition_scheme(df_all)
+        if condition_scheme is None:
+            st.sidebar.caption(
+                "体調の記録が少ないため、区切りを自動で決められません。固定の基準を使います。"
+            )
 
     if display_mode == "出席状況":
         render_attendance(df_all, user_dir)
@@ -817,7 +839,18 @@ def main() -> None:
 
     fig = build_figure(df, axis_label, axis_col, borders, highlights, absences)
     st.plotly_chart(fig, use_container_width=True)
-    render_condition_legend()
+    render_condition_legend(condition_scheme)
+    if (
+        condition_scheme is not None
+        and condition_scheme.best_band_max_points >= CONDITION_CAUTION_POINTS
+    ):
+        st.caption(
+            "※ この方は、点数が全体的に高めのため、「良好」の区分にも"
+            f"{condition_scheme.best_band_max_points:g}ptの日が含まれています"
+            f"（固定の基準では{CONDITION_CAUTION_POINTS}pt以上は「注意」以上）。"
+            "点数そのもので見たいときは、左の「体調マーカーの区切り」を「固定」に"
+            "切り替えてください。"
+        )
     render_absence_legend(absences)
     render_highlight_legend(highlights)
     if borders:
