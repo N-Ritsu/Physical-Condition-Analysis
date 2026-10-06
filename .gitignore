@@ -218,9 +218,9 @@ __marimo__/
 .streamlit/secrets.toml
 
 # 個人の健康データ（機密情報のためリポジトリに含めない）
-data/*.xlsx
-data/*.xls
-data/*.csv
+data/**/*.xlsx
+data/**/*.xls
+data/**/*.csv
 !data/.gitkeep
 *Zone.Identifier
 ~$*.xlsx
