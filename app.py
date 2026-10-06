@@ -16,7 +16,17 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from health_dashboard.attendance import weekly_attendance
+from health_dashboard.border_analysis import (
+    MIN_DAYS_BEYOND,
+    MIN_RECORDED_DAYS,
+    BadBorder,
+    count_recorded_days,
+    describe_border,
+    find_bad_borders,
+    heaviest_border_exceeded,
+)
 from health_dashboard.data_loader import (
+    AXIS_DIRECTION,
     AXIS_OPTIONS,
     CATEGORICAL_AXIS_COLUMNS,
     CONDITION_ABNORMAL_THRESHOLD,
@@ -88,6 +98,9 @@ _CONDITION_DEFAULT_STYLE = {
     "color": "#000000",
     "label": "× 記録なし（早退等の可能性）",
 }
+
+# 悪化ボーダーの横線の色。体調が×になる割合: 90%=赤、80%=黄、70%=青。
+_BORDER_LINE_COLORS = {0.9: "#e53935", 0.8: "#f9a825", 0.7: "#1e88e5"}
 
 _QUALITY_SCORE_TICKS = {1: "悪い", 2: "普通", 3: "良好"}
 
@@ -234,7 +247,9 @@ def _expand_choices(df: pd.DataFrame, axis_col: str) -> pd.DataFrame:
     return expanded.explode(axis_col).dropna(subset=[axis_col]).reset_index(drop=True)
 
 
-def build_figure(df, axis_label: str, axis_col: str) -> go.Figure:
+def build_figure(
+    df, axis_label: str, axis_col: str, borders: list[BadBorder] | None = None
+) -> go.Figure:
     is_categorical = axis_col in CATEGORICAL_AXIS_COLUMNS
     if is_categorical:
         df = _expand_choices(df, axis_col)
@@ -309,6 +324,22 @@ def build_figure(df, axis_label: str, axis_col: str) -> go.Figure:
             ticktext=list(_QUALITY_SCORE_TICKS.values()),
         )
 
+    for border in borders or []:
+        color = _BORDER_LINE_COLORS[border.min_rate]
+        for i, y in enumerate(sorted(border.line_values, reverse=True)):
+            line = dict(color=color, width=2, dash="dash")
+            if i == 0:
+                # 基準値の上下に2本引く場合も、名前は上の線にだけ付ける。
+                fig.add_hline(
+                    y=y,
+                    line=line,
+                    annotation_text=f"{border.min_rate * 100:.0f}%ボーダー",
+                    annotation_position="top right",
+                    annotation_font_color=color,
+                )
+            else:
+                fig.add_hline(y=y, line=line)
+
     _apply_date_axis_ticks(fig, df["date"].tolist())
     return fig
 
@@ -334,6 +365,56 @@ def render_condition_legend() -> None:
         + "セルフケアシートに記録がない日は早退等の可能性を示す黒い×で表示）",
         unsafe_allow_html=True,
     )
+
+
+def render_border_legend() -> None:
+    st.caption(
+        "横線は悪化ボーダー（この人の体調が×になる割合）: "
+        '<span style="color:#e53935">赤＝90%</span>　'
+        '<span style="color:#f9a825">黄＝80%</span>　'
+        '<span style="color:#1e88e5">青＝70%</span>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_border_panel(
+    borders: list[BadBorder],
+    axis_col: str,
+    axis_label: str,
+    latest_value: float | None,
+    recorded_days: int,
+    bad_days: int,
+) -> None:
+    """個人ごとの悪化ボーダーを、振り返りコメントとは独立して表示する。"""
+    st.subheader("悪化ボーダー")
+    st.caption(
+        "この方の過去の記録（全期間）から、この項目がどの値になると体調が×（注意以上）に"
+        "なりやすいかを探した結果です。記録が少ないうちは偏りが出やすいため、該当日数も"
+        "あわせてご覧ください。医学的な基準ではありません。"
+    )
+    if not borders:
+        if recorded_days < MIN_RECORDED_DAYS:
+            st.caption(
+                f"体調の記録がある日が{recorded_days}日で、ボーダーを調べるのに必要な"
+                f"{MIN_RECORDED_DAYS}日に達していません。"
+            )
+        else:
+            st.caption(
+                f"体調の記録がある{recorded_days}日（うち×は{bad_days}日）を調べましたが、"
+                f"超えた日が{MIN_DAYS_BEYOND}日以上あり、体調が×になる割合が70%以上になる"
+                "ボーダーは見つかっていません。"
+            )
+        return
+    for border in borders:
+        show = {0.9: st.error, 0.8: st.warning, 0.7: st.info}[border.min_rate]
+        show(describe_border(axis_col, axis_label, border))
+    exceeded = heaviest_border_exceeded(borders, latest_value)
+    if exceeded is not None:
+        latest_text = format_axis_value(axis_col, latest_value)
+        st.markdown(
+            f"**直近の{axis_label}（{latest_text}）は、「{exceeded.report}」のボーダーを"
+            "超えています。**"
+        )
 
 
 def render_stats(df, axis_col: str) -> None:
@@ -369,7 +450,9 @@ def render_weather_breakdown(df, axis_col: str, axis_label: str) -> None:
     st.table(pd.DataFrame(rows).set_index("天気"))
 
 
-def render_insight(df, axis_col: str, axis_label: str, period_label: str) -> None:
+def render_insight(
+    df, axis_col: str, axis_label: str, period_label: str, borders: list[BadBorder]
+) -> None:
     st.subheader("振り返りコメント")
     if axis_col in WEATHER_AXIS_COLUMNS:
         st.info(
@@ -382,7 +465,7 @@ def render_insight(df, axis_col: str, axis_label: str, period_label: str) -> Non
         "提案するための参考コメントです。"
     )
 
-    st.info(generate_rule_based_insight(df, axis_col, axis_label, period_label))
+    st.info(generate_rule_based_insight(df, axis_col, axis_label, period_label, borders))
 
 
 def _correlation_cell_style(r: float) -> str:
@@ -637,9 +720,15 @@ def main() -> None:
         st.warning("選択した期間にデータがありません。")
         return
 
-    fig = build_figure(df, axis_label, axis_col)
+    borders = []
+    if axis_col not in CATEGORICAL_AXIS_COLUMNS:
+        borders = find_bad_borders(df_all, axis_col, AXIS_DIRECTION.get(axis_col, "none"))
+
+    fig = build_figure(df, axis_label, axis_col, borders)
     st.plotly_chart(fig, use_container_width=True)
     render_condition_legend()
+    if borders:
+        render_border_legend()
 
     if axis_col in CATEGORICAL_AXIS_COLUMNS:
         st.caption(
@@ -652,7 +741,11 @@ def main() -> None:
     if axis_col not in WEATHER_AXIS_COLUMNS:
         render_weather_breakdown(df, axis_col, axis_label)
     st.divider()
-    render_insight(df, axis_col, axis_label, period_label)
+    latest_values = df_all[axis_col].dropna()
+    latest_value = float(latest_values.iloc[-1]) if not latest_values.empty else None
+    recorded_days, bad_days = count_recorded_days(df_all, axis_col)
+    render_border_panel(borders, axis_col, axis_label, latest_value, recorded_days, bad_days)
+    render_insight(df, axis_col, axis_label, period_label, borders)
 
 
 if __name__ == "__main__":

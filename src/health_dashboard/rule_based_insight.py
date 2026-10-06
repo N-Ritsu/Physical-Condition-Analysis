@@ -28,6 +28,9 @@ docs/05_prototype_creation_progress.md 参照）。
   安定度比較とは別の文で言及する（例: 中途覚醒回数が「安定していた」期間が、
   必ずしも「回数が少なかった」期間とは限らない）。方向性のない軸（入眠時間・起床時間）
   では評価しない。
+- 個人ごとの悪化ボーダー（border_analysis.py）。ボーダー自体の説明は、振り返りコメントとは
+  別にアプリ側で独立して表示する。ここでは、直近の値がボーダーを超えている場合に、
+  締めの一文を注意喚起にするためだけに使う（別表示の内容と矛盾させないため）。
 - 「直近1週間」表示は期間内比較ができるほどデータがないため、直近2日分の値を
   軸ごとの絶対的な良し悪し基準（トレンドや平均とは無関係）で評価する。
 
@@ -46,6 +49,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from health_dashboard.border_analysis import BadBorder, heaviest_border_exceeded
 from health_dashboard.data_loader import AXIS_DIRECTION
 from health_dashboard.formatting import format_axis_value
 from health_dashboard.insight_context import build_context
@@ -466,6 +470,7 @@ def _closing_phrase(
     condition_streak_active: bool,
     period_analysis: _PeriodAnalysis | None,
     recent_absolute_bad: bool,
+    border_hit: bool = False,
 ) -> str:
     """分析結果に応じて締めの一文を出し分ける。
 
@@ -489,6 +494,7 @@ def _closing_phrase(
         or recent_is_volatile
         or recent_bad_level
         or recent_absolute_bad
+        or border_hit
     )
     if is_concerning:
         return (
@@ -514,9 +520,17 @@ def _closing_phrase(
 
 
 def generate_rule_based_insight(
-    df: pd.DataFrame, axis_col: str, axis_label: str, period_label: str
+    df: pd.DataFrame,
+    axis_col: str,
+    axis_label: str,
+    period_label: str,
+    borders: list[BadBorder] | None = None,
 ) -> str:
-    """統計値の条件分岐のみで、即時に振り返りコメントを生成する（LLM不使用）。"""
+    """統計値の条件分岐のみで、即時に振り返りコメントを生成する（LLM不使用）。
+
+    bordersは、この項目の悪化ボーダー（find_bad_borders）。直近の値がいずれかを超えて
+    いる場合に、締めの一文を注意喚起にする。
+    """
     ctx = build_context(df, axis_col, axis_label, period_label)
 
     if ctx.stats.count == 0:
@@ -543,6 +557,8 @@ def generate_rule_based_insight(
     condition_streak_active = streak_length >= _CONDITION_STREAK_MIN_LENGTH
     if condition_streak_active:
         sentences.append(f"直近の記録{streak_length}件連続で、体調が「注意」以上の状態になっています。")
+
+    border_hit = heaviest_border_exceeded(borders or [], ctx.latest_value) is not None
 
     # 安定度比較（概要）→ 水準比較 → 安定度比較（直近との比較）の順で並べる。
     # 「どの期間が安定/不安定だったか」の直後に「どの期間の値が良かった/悪かったか」を
@@ -576,6 +592,7 @@ def generate_rule_based_insight(
         condition_streak_active,
         period_analysis,
         recent_absolute_bad,
+        border_hit,
     )
     sentences.append(closing)
 
