@@ -17,9 +17,11 @@ import streamlit as st
 
 from health_dashboard.data_loader import (
     AXIS_OPTIONS,
+    CATEGORICAL_AXIS_COLUMNS,
     CONDITION_ABNORMAL_THRESHOLD,
     CONDITION_CAUTION_POINTS,
     CONDITION_WARNING_POINTS,
+    MOOD_TYPE_CHOICES,
     WEATHER_AXIS_COLUMNS,
     attach_condition,
     filter_by_period,
@@ -201,7 +203,23 @@ def _condition_hover_text(label, points) -> str:
     return f"{label}（{int(points)}pt）"
 
 
+def _expand_choices(df: pd.DataFrame, axis_col: str) -> pd.DataFrame:
+    """複数選択の項目を、選択肢ごとに1行へ展開する（1日に複数選んだ日は複数行になる）。
+
+    元の選択全体は表示用に「_selection_text」へ残す。選択のない日は行が無くなる。
+    """
+    expanded = df.copy()
+    expanded["_selection_text"] = expanded[axis_col].map(
+        lambda v: "、".join(v) if isinstance(v, list) else "―"
+    )
+    return expanded.explode(axis_col).dropna(subset=[axis_col]).reset_index(drop=True)
+
+
 def build_figure(df, axis_label: str, axis_col: str) -> go.Figure:
+    is_categorical = axis_col in CATEGORICAL_AXIS_COLUMNS
+    if is_categorical:
+        df = _expand_choices(df, axis_col)
+
     styles = [
         _CONDITION_STYLE.get(label, _CONDITION_DEFAULT_STYLE) for label in df["condition_label"]
     ]
@@ -212,12 +230,24 @@ def build_figure(df, axis_label: str, axis_col: str) -> go.Figure:
 
     hover_weather = [label if isinstance(label, str) else "―" for label in df["weather_label"]]
 
+    # 選択式の軸は、折れ線にせずプロットのみにする。全選択肢を縦軸に並べるため、
+    # 選択肢の位置（0始まり）を縦軸の値として使う。
+    if is_categorical:
+        positions = {choice: i for i, choice in enumerate(MOOD_TYPE_CHOICES)}
+        y_values = df[axis_col].map(positions)
+        hover_value = df["_selection_text"].tolist()
+        value_template = "%{customdata[2]}"
+    else:
+        y_values = df[axis_col]
+        hover_value = [""] * len(df)
+        value_template = "%{y}"
+
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
             x=df["date"],
-            y=df[axis_col],
-            mode="lines+markers",
+            y=y_values,
+            mode="markers" if is_categorical else "lines+markers",
             line=dict(color="#90a4ae"),
             marker=dict(
                 size=11,
@@ -225,9 +255,9 @@ def build_figure(df, axis_label: str, axis_col: str) -> go.Figure:
                 color=[s["color"] for s in styles],
                 line=dict(width=1, color="white"),
             ),
-            customdata=list(zip(hover_condition, hover_weather, strict=True)),
+            customdata=list(zip(hover_condition, hover_weather, hover_value, strict=True)),
             hovertemplate=(
-                "%{x|%-m/%-d}<br>値: %{y}<br>体調: %{customdata[0]}"
+                f"%{{x|%-m/%-d}}<br>値: {value_template}<br>体調: %{{customdata[0]}}"
                 "<br>天気: %{customdata[1]}<extra></extra>"
             ),
             name=axis_label,
@@ -246,6 +276,13 @@ def build_figure(df, axis_label: str, axis_col: str) -> go.Figure:
 
     if axis_col in ("bedtime_hours", "wake_hours"):
         _apply_time_axis_ticks(fig, df[axis_col].dropna().tolist())
+    elif is_categorical:
+        fig.update_yaxes(
+            tickmode="array",
+            tickvals=list(range(len(MOOD_TYPE_CHOICES))),
+            ticktext=MOOD_TYPE_CHOICES,
+            range=[len(MOOD_TYPE_CHOICES) - 0.5, -0.5],  # 先頭の選択肢を上に置く
+        )
     elif axis_col == "quality_score":
         fig.update_yaxes(
             tickmode="array",
@@ -410,7 +447,8 @@ def main() -> None:
             st.caption(weather_notice)
 
     if display_mode == "相関表":
-        correlation_axes = axes + [
+        numeric_axes = [(label, col) for label, col in axes if col not in CATEGORICAL_AXIS_COLUMNS]
+        correlation_axes = numeric_axes + [
             (label, col) for label, col in _CORRELATION_EXTRA_AXES if df_all[col].notna().any()
         ]
         render_correlation_table(df_all, correlation_axes)
@@ -425,6 +463,13 @@ def main() -> None:
     fig = build_figure(df, axis_label, axis_col)
     st.plotly_chart(fig, use_container_width=True)
     render_condition_legend()
+
+    if axis_col in CATEGORICAL_AXIS_COLUMNS:
+        st.caption(
+            f"{axis_label}は選択式の項目のため、平均などの統計と振り返りコメントは"
+            "表示しません。"
+        )
+        return
 
     render_stats(df, axis_col)
     if axis_col not in WEATHER_AXIS_COLUMNS:

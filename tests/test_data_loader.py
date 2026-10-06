@@ -17,6 +17,7 @@ from health_dashboard.data_loader import (
     load_daily_reports,
     load_selfcare_points,
     normalize_bedtime,
+    parse_mood_types,
     parse_sleep_quality,
 )
 
@@ -72,6 +73,7 @@ def _write_sample_workbook(path):
             "睡眠の質",
             "気分（起床時）",
             "気分（通所時）",
+            "気分の種類",
         ]
     )
     ws.append(
@@ -87,6 +89,7 @@ def _write_sample_workbook(path):
             "悪い, 中途覚醒３以上",
             3.0,
             8.0,
+            "落ち着いている",
         ]
     )
     ws.append(
@@ -102,6 +105,7 @@ def _write_sample_workbook(path):
             "良好",
             7.0,
             6.0,
+            "憂鬱",
         ]
     )
     ws.append(
@@ -117,6 +121,7 @@ def _write_sample_workbook(path):
             "良好",
             6.0,
             7.0,
+            "落ち着いている, 心配（仕事のこと）",  # 複数選択。選択肢にない記入は「その他」
         ]
     )
     wb.save(path)
@@ -142,6 +147,7 @@ def test_load_daily_reports(tmp_path):
     assert df.loc[0, "sleep_duration_hours"] == pytest.approx(9 + 20 / 60)
     # 就寝0:30(日付またぎ後、24.5) -> 起床7:00(7.0) は6時間30分
     assert df.loc[2, "sleep_duration_hours"] == pytest.approx(6.5)
+    assert list(df["mood_type"]) == [["落ち着いている"], ["憂鬱"], ["落ち着いている", "その他"]]
 
 
 def _write_selfcare_workbook(path, sheet_specs):
@@ -323,3 +329,38 @@ def test_find_user_files_prefers_newest_when_multiple(tmp_path):
 )
 def test_coerce_time_text_formats(raw, expected):
     assert _coerce_time(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("うれしい", ["うれしい"]),
+        (" 落ち着いている ", ["落ち着いている"]),
+        ("落ち着いている, 憂鬱", ["落ち着いている", "憂鬱"]),
+        ("不安、緊張,心配", ["不安", "緊張", "心配"]),
+        ("不安, 不安", ["不安"]),
+        ("その他", ["その他"]),
+        ("眠い", ["その他"]),
+        ("不安, 眠い, だるい", ["不安", "その他"]),
+        ("", None),
+        ("   ", None),
+        (" , ", None),
+        (None, None),
+        (float("nan"), None),
+    ],
+)
+def test_parse_mood_types(raw, expected):
+    assert parse_mood_types(raw) == expected
+
+
+def test_load_daily_reports_without_mood_type_column(tmp_path):
+    path = tmp_path / "old_format.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["日付", "就寝時間", "起床時間", "睡眠の質", "気分（起床時）", "気分（通所時）"])
+    ws.append([dt.datetime(2026, 6, 4), dt.time(9, 30), dt.time(6, 20), "良好", 7.0, 6.0])
+    wb.save(path)
+
+    df = load_daily_reports(path)
+
+    assert df["mood_type"].isna().all()

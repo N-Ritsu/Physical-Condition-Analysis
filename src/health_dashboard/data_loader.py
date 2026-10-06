@@ -24,6 +24,8 @@ COL_WAKE = "起床時間"
 COL_QUALITY = "睡眠の質"
 COL_MOOD_WAKE = "気分（起床時）"
 COL_MOOD_COMMUTE = "気分（通所時）"
+# 日報の「気分の種類」（選択式）。古い形式のファイルには無い場合があるため必須列にはしない。
+COL_MOOD_TYPE = "気分の種類"
 
 REQUIRED_COLUMNS = [
     COL_DATE,
@@ -65,12 +67,30 @@ AXIS_OPTIONS: list[tuple[str, str]] = [
     ("中途覚醒回数", "night_awakenings"),
     ("気分（起床時）", "mood_wake"),
     ("気分（通所時）", "mood_commute"),
+    # 選択式の項目。グラフ（プロットのみ）でのみ使い、統計・振り返りコメント・相関表の対象外。
+    ("精神状態", "mood_type"),
     # 気象データ（weather.py）。気象の設定が無い場合は値が空になり、画面では選択肢から外れる。
     ("気圧（日平均）", "pressure_hpa"),
     ("気圧（前日差）", "pressure_change_hpa"),
 ]
 # 利用者の状態ではなく外部の気象データを表す軸（振り返りコメントの対象外）。
 WEATHER_AXIS_COLUMNS = frozenset({"pressure_hpa", "pressure_change_hpa"})
+# 数値ではなく選択肢（カテゴリ）を表す軸。平均・相関などの数値計算ができない。
+CATEGORICAL_AXIS_COLUMNS = frozenset({"mood_type"})
+
+# 日報の「気分の種類」の選択肢（グラフの縦軸に上から並べる順）。
+MOOD_TYPE_CHOICES = [
+    "うれしい",
+    "楽しい",
+    "怒り",
+    "イライラ",
+    "落ち着いている",
+    "不安",
+    "緊張",
+    "心配",
+    "憂鬱",
+    "その他",
+]
 
 # 各軸の「良し悪しの方向性」。安定度（ばらつき）の評価とは別に、平均値の増減を
 # どう解釈するかを表す振り返りコメント生成用のメタデータ。
@@ -85,6 +105,7 @@ AXIS_DIRECTION: dict[str, str] = {
     "night_awakenings": "lower",
     "mood_wake": "higher",
     "mood_commute": "higher",
+    "mood_type": "none",
     "pressure_hpa": "none",
     "pressure_change_hpa": "none",
 }
@@ -190,6 +211,25 @@ def _coerce_time(value: object) -> dt.time | None:
     return None
 
 
+def parse_mood_types(value: object) -> list[str] | None:
+    """「気分の種類」を選択肢のリストにする。複数選択は「A, B」のように併記されている。
+
+    選択肢にない記入（その他の自由記述等）は「その他」にまとめ、重複は除く。
+    空欄はNone。
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    choices: list[str] = []
+    for token in re.split(r"[、,，]", str(value)):
+        token = token.strip()
+        if not token:
+            continue
+        choice = token if token in MOOD_TYPE_CHOICES else "その他"
+        if choice not in choices:
+            choices.append(choice)
+    return choices or None
+
+
 def parse_sleep_quality(text: object) -> tuple[str | None, int]:
     """「悪い, 中途覚醒３以上」のような自由記述から (睡眠の質ラベル, 中途覚醒回数) を抽出する。
 
@@ -227,7 +267,7 @@ def load_daily_reports(path: str | Path) -> pd.DataFrame:
     戻り値の主な列:
         date, bedtime, bedtime_hours, wake_time, wake_hours, sleep_duration_hours,
         quality_label, quality_score, night_awakenings,
-        mood_wake, mood_commute
+        mood_wake, mood_commute, mood_type
     """
     header_row = find_header_row(path)
     raw = pd.read_excel(path, header=header_row, engine="openpyxl")
@@ -260,6 +300,10 @@ def load_daily_reports(path: str | Path) -> pd.DataFrame:
 
     df["mood_wake"] = pd.to_numeric(raw[COL_MOOD_WAKE], errors="coerce")
     df["mood_commute"] = pd.to_numeric(raw[COL_MOOD_COMMUTE], errors="coerce")
+    if COL_MOOD_TYPE in raw.columns:
+        df["mood_type"] = raw[COL_MOOD_TYPE].map(parse_mood_types)
+    else:
+        df["mood_type"] = None
 
     df = df.sort_values("date").reset_index(drop=True)
     return df
