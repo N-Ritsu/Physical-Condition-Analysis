@@ -2,7 +2,12 @@ import datetime as dt
 
 import pandas as pd
 
-from health_dashboard.rule_based_insight import generate_rule_based_insight
+from health_dashboard.rule_based_insight import (
+    HighlightPeriod,
+    find_highlight_periods,
+    generate_rule_based_insight,
+    resolve_highlight_segments,
+)
 
 
 def _df(values, axis_col="mood_wake", condition_labels=None, start=dt.date(2026, 1, 1)):
@@ -334,3 +339,81 @@ def test_recent_absolute_check_not_applied_to_direction_none_axis():
     df = _df(values, axis_col="bedtime_hours")
     text = generate_rule_based_insight(df, "bedtime_hours", "入眠時間", "直近1週間")
     assert "注意したい値が含まれています" not in text
+
+
+# --- グラフの背景色づけ用の期間（振り返りコメントが言及する期間） ---
+
+_START = dt.date(2026, 1, 1)
+
+
+def _d(offset):
+    return _START + dt.timedelta(days=offset)
+
+
+def test_highlight_periods_stability_best_and_worst_when_gap_is_large():
+    values = _calm(5, 28) + _alternating(1, 10, 28)
+    df = _df(values, axis_col="wake_hours")
+
+    periods = find_highlight_periods(df, "wake_hours", "全期間")
+
+    assert HighlightPeriod(_d(0), _d(27), "best_stability") in periods
+    assert HighlightPeriod(_d(28), _d(55), "worst_stability") in periods
+    assert not any(p.kind == "best_level" for p in periods)  # 方向性のない軸は水準比較なし
+
+
+def test_highlight_periods_level_best_for_directional_axis():
+    values = _calm(0, 28) + _calm(3, 28)  # 安定度は同じで、水準だけ差がある
+    df = _df(values, axis_col="night_awakenings")
+
+    periods = find_highlight_periods(df, "night_awakenings", "全期間")
+
+    assert [(p.start, p.end, p.kind) for p in periods] == [(_d(0), _d(27), "best_level")]
+
+
+def test_highlight_periods_empty_when_no_notable_difference():
+    df = _df(_calm(1, 56), axis_col="night_awakenings")
+
+    assert find_highlight_periods(df, "night_awakenings", "全期間") == []
+
+
+def test_highlight_periods_empty_for_one_week_view():
+    df = _df(_calm(0, 7) + _calm(3, 7), axis_col="night_awakenings")
+
+    assert find_highlight_periods(df, "night_awakenings", "直近1週間") == []
+
+
+def test_resolve_segments_priority_red_over_green_over_blue():
+    periods = [
+        HighlightPeriod(_d(0), _d(9), "best_stability"),  # 青: 0〜9日
+        HighlightPeriod(_d(5), _d(14), "best_level"),  # 緑: 5〜14日
+        HighlightPeriod(_d(12), _d(19), "worst_stability"),  # 赤: 12〜19日
+    ]
+
+    segments = resolve_highlight_segments(periods)
+
+    assert [(s.start, s.end, s.kind) for s in segments] == [
+        (_d(0), _d(4), "best_stability"),  # 青は緑と重ならない部分だけ
+        (_d(5), _d(11), "best_level"),  # 緑は赤と重ならない部分だけ
+        (_d(12), _d(19), "worst_stability"),  # 赤は全部
+    ]
+
+
+def test_resolve_segments_same_window_green_hides_blue():
+    periods = [
+        HighlightPeriod(_d(0), _d(27), "best_stability"),
+        HighlightPeriod(_d(0), _d(27), "best_level"),
+    ]
+
+    segments = resolve_highlight_segments(periods)
+
+    assert [(s.start, s.end, s.kind) for s in segments] == [(_d(0), _d(27), "best_level")]
+
+
+def test_resolve_segments_empty_and_separate_periods_not_merged():
+    assert resolve_highlight_segments([]) == []
+
+    periods = [
+        HighlightPeriod(_d(0), _d(2), "best_level"),
+        HighlightPeriod(_d(10), _d(12), "best_level"),
+    ]
+    assert len(resolve_highlight_segments(periods)) == 2

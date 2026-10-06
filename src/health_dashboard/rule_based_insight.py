@@ -366,6 +366,66 @@ def _analyze_period(df: pd.DataFrame, axis_col: str, period_label: str) -> _Peri
     )
 
 
+@dataclass(frozen=True)
+class HighlightPeriod:
+    """振り返りコメントで言及している期間（グラフの背景色づけ用）。"""
+
+    start: dt.date
+    end: dt.date
+    # "best_stability"（最も安定）/ "best_level"（最も良い状態）/
+    # "worst_stability"（最もばらつきが大きい）
+    kind: str
+
+
+# 期間が重なった場合の優先度（大きいほど優先）。赤＞緑＞青。
+HIGHLIGHT_PRIORITY = {"best_stability": 0, "best_level": 1, "worst_stability": 2}
+
+
+def find_highlight_periods(
+    df: pd.DataFrame, axis_col: str, period_label: str
+) -> list[HighlightPeriod]:
+    """振り返りコメントが「最も安定」「最もばらつきが大きい」「最も良い状態」と述べる期間を返す。
+
+    コメントに書かれる条件（安定度に大きな差がある／水準に大きな差がある）と同じ場合のみ返す。
+    """
+    analysis = _analyze_period(df, axis_col, period_label)
+    if analysis is None:
+        return []
+
+    periods: list[HighlightPeriod] = []
+    if analysis.stability_pattern == "large_gap":
+        best, worst = analysis.stability_best, analysis.stability_worst
+        periods.append(HighlightPeriod(best["start"], best["end"], "best_stability"))
+        periods.append(HighlightPeriod(worst["start"], worst["end"], "worst_stability"))
+    if analysis.level_best is not None and analysis.level_gap_is_large:
+        best = analysis.level_best
+        periods.append(HighlightPeriod(best["start"], best["end"], "best_level"))
+    return periods
+
+
+def resolve_highlight_segments(periods: list[HighlightPeriod]) -> list[HighlightPeriod]:
+    """重なった期間を優先度（赤＞緑＞青）で解決し、重ならない区間のリストにする。
+
+    日ごとに最も優先度の高い種類を割り当て、同じ種類が連続する日をひとまとめにする。
+    """
+    kind_by_day: dict[dt.date, str] = {}
+    for period in sorted(periods, key=lambda p: HIGHLIGHT_PRIORITY[p.kind]):
+        day = period.start
+        while day <= period.end:
+            kind_by_day[day] = period.kind  # 優先度の高いものが後から上書きする
+            day += dt.timedelta(days=1)
+
+    segments: list[HighlightPeriod] = []
+    for day in sorted(kind_by_day):
+        kind = kind_by_day[day]
+        last = segments[-1] if segments else None
+        if last is not None and last.kind == kind and last.end + dt.timedelta(days=1) == day:
+            segments[-1] = HighlightPeriod(last.start, day, kind)
+        else:
+            segments.append(HighlightPeriod(day, day, kind))
+    return segments
+
+
 def _stability_window_phrase(
     analysis: _PeriodAnalysis | None, axis_col: str, axis_label: str
 ) -> tuple[str, str]:

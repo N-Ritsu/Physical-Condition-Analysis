@@ -44,7 +44,12 @@ from health_dashboard.data_loader import (
     load_selfcare_points,
 )
 from health_dashboard.formatting import format_axis_value, format_clock
-from health_dashboard.rule_based_insight import generate_rule_based_insight
+from health_dashboard.rule_based_insight import (
+    HighlightPeriod,
+    find_highlight_periods,
+    generate_rule_based_insight,
+    resolve_highlight_segments,
+)
 from health_dashboard.stats import (
     CorrelationPair,
     correlation_matrix,
@@ -101,6 +106,13 @@ _CONDITION_DEFAULT_STYLE = {
 
 # 悪化ボーダーの横線の色。体調が×になる割合: 90%=赤、80%=黄、70%=青。
 _BORDER_LINE_COLORS = {0.9: "#e53935", 0.8: "#f9a825", 0.7: "#1e88e5"}
+
+# 振り返りコメントで言及している期間の背景色（薄い色）。
+_HIGHLIGHT_STYLE = {
+    "worst_stability": ("rgba(244, 67, 54, 0.14)", "薄い赤＝ばらつきが最も大きかった期間"),
+    "best_level": ("rgba(76, 175, 80, 0.16)", "薄い緑＝最も良い状態だった期間"),
+    "best_stability": ("rgba(33, 150, 243, 0.14)", "薄い青＝最も安定していた期間"),
+}
 
 _QUALITY_SCORE_TICKS = {1: "悪い", 2: "普通", 3: "良好"}
 
@@ -248,7 +260,11 @@ def _expand_choices(df: pd.DataFrame, axis_col: str) -> pd.DataFrame:
 
 
 def build_figure(
-    df, axis_label: str, axis_col: str, borders: list[BadBorder] | None = None
+    df,
+    axis_label: str,
+    axis_col: str,
+    borders: list[BadBorder] | None = None,
+    highlights: list[HighlightPeriod] | None = None,
 ) -> go.Figure:
     is_categorical = axis_col in CATEGORICAL_AXIS_COLUMNS
     if is_categorical:
@@ -324,6 +340,16 @@ def build_figure(
             ticktext=list(_QUALITY_SCORE_TICKS.values()),
         )
 
+    for segment in resolve_highlight_segments(highlights or []):
+        # 日付の中心から前後半日ずつ広げ、1日だけの区間も見えるようにする。
+        fig.add_vrect(
+            x0=dt.datetime.combine(segment.start, dt.time()) - dt.timedelta(hours=12),
+            x1=dt.datetime.combine(segment.end, dt.time()) + dt.timedelta(hours=12),
+            fillcolor=_HIGHLIGHT_STYLE[segment.kind][0],
+            line_width=0,
+            layer="below",
+        )
+
     for border in borders or []:
         color = _BORDER_LINE_COLORS[border.min_rate]
         for i, y in enumerate(sorted(border.line_values, reverse=True)):
@@ -365,6 +391,20 @@ def render_condition_legend() -> None:
         + "セルフケアシートに記録がない日は早退等の可能性を示す黒い×で表示）",
         unsafe_allow_html=True,
     )
+
+
+def render_highlight_legend(highlights: list[HighlightPeriod]) -> None:
+    kinds = {segment.kind for segment in resolve_highlight_segments(highlights)}
+    items = [
+        f'<span style="background:{fill}; padding:0 6px">{text}</span>'
+        for kind, (fill, text) in _HIGHLIGHT_STYLE.items()
+        if kind in kinds
+    ]
+    if items:
+        st.caption(
+            "背景色（振り返りコメントで触れている期間）: " + "　".join(items),
+            unsafe_allow_html=True,
+        )
 
 
 def render_border_legend() -> None:
@@ -724,9 +764,14 @@ def main() -> None:
     if axis_col not in CATEGORICAL_AXIS_COLUMNS:
         borders = find_bad_borders(df_all, axis_col, AXIS_DIRECTION.get(axis_col, "none"))
 
-    fig = build_figure(df, axis_label, axis_col, borders)
+    highlights = []
+    if axis_col not in CATEGORICAL_AXIS_COLUMNS | WEATHER_AXIS_COLUMNS:
+        highlights = find_highlight_periods(df, axis_col, period_label)
+
+    fig = build_figure(df, axis_label, axis_col, borders, highlights)
     st.plotly_chart(fig, use_container_width=True)
     render_condition_legend()
+    render_highlight_legend(highlights)
     if borders:
         render_border_legend()
 
