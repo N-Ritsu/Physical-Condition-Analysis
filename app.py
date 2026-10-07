@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import sys
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "src"))
@@ -15,6 +17,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from health_dashboard import paths
 from health_dashboard.attendance import weekly_attendance
 from health_dashboard.border_analysis import (
     MIN_DAYS_BEYOND,
@@ -48,6 +51,13 @@ from health_dashboard.data_loader import (
     load_daily_reports,
     load_selfcare_points,
 )
+from health_dashboard.data_management import (
+    DAILY,
+    UPLOAD_KINDS,
+    create_user,
+    file_status,
+    save_uploaded_file,
+)
 from health_dashboard.formatting import format_axis_value, format_clock
 from health_dashboard.rule_based_insight import (
     HighlightPeriod,
@@ -68,10 +78,12 @@ from health_dashboard.weather import (
     load_weather_location,
 )
 
-DATA_DIR = Path(__file__).parent / "data"
-WEATHER_CONFIG_PATH = Path(__file__).parent / "weather_config.json"
+DATA_DIR = paths.data_dir()
+WEATHER_CONFIG_PATH = paths.weather_config_path()
 PERIOD_OPTIONS = ["直近1ヶ月", "全期間"]
-DISPLAY_MODE_OPTIONS = ["グラフ", "出席状況", "相関表"]
+DATA_MANAGEMENT_MODE = "データ管理"
+ADD_USER_OPTION = "新しい利用者を追加"
+DISPLAY_MODE_OPTIONS = ["グラフ", "出席状況", "相関表", DATA_MANAGEMENT_MODE]
 
 # 縦軸の選択肢にはないが、相関表には加える項目: (表示名, 列名)。
 # 天気は 雨=0・曇=1・晴=2 に数値化した値、体調ポイントはセルフケアシート由来（高いほど不調）。
@@ -223,32 +235,20 @@ def _attach_weather_to(df: pd.DataFrame) -> tuple[pd.DataFrame, str | None]:
 
 
 def load_source_dataframe(user_dir: Path | None):
+    """利用者の日報・セルフケアを読み込む。日報が登録されていなければ (None, None)。"""
     daily_path, selfcare_path = find_user_files(user_dir) if user_dir else (None, None)
+    if daily_path is None:
+        return None, None
 
-    if daily_path is not None:
-        df = _load_data(str(daily_path), daily_path.stat().st_mtime)
-    else:
-        location = user_dir if user_dir else DATA_DIR
-        st.warning(
-            f"日報のファイル（ファイル名に「日報」を含むExcel）が見つかりません: {location}\n"
-            "日報データ（Excel）をアップロードしてください。"
-        )
-        uploaded = st.file_uploader("日報データ（.xlsx）", type=["xlsx"])
-        if uploaded is None:
-            st.stop()
-        tmp_path = Path(st.session_state.setdefault("_tmp_dir", ".streamlit_uploads"))
-        tmp_path.mkdir(exist_ok=True)
-        saved = tmp_path / uploaded.name
-        saved.write_bytes(uploaded.getbuffer())
-        df = _load_data(str(saved), saved.stat().st_mtime)
+    df = _load_data(str(daily_path), daily_path.stat().st_mtime)
 
     if selfcare_path is not None:
         selfcare_df = _load_selfcare(str(selfcare_path), selfcare_path.stat().st_mtime)
         df = attach_condition(df, selfcare_df)
     else:
         st.info(
-            "セルフケアシート（ファイル名に「セルフケア」を含むExcel）が見つかりません: "
-            f"{user_dir or DATA_DIR}\n"
+            "セルフケアシートがまだ登録されていません（左の「表示」の「データ管理」から"
+            "アップロードできます）。"
             f"体調マーカーはすべて「{_CONDITION_DEFAULT_STYLE['label']}」として表示されます。"
         )
         df["condition_points"] = None
@@ -771,6 +771,103 @@ def render_correlation_table(df: pd.DataFrame, axes: list[tuple[str, str]]) -> N
     render_correlation_summary(pairs_by_strength, label_of)
 
 
+def _flash(message: str) -> None:
+    st.session_state.setdefault("_flash", []).append(message)
+
+
+def _show_flash_messages() -> None:
+    for message in st.session_state.pop("_flash", []):
+        st.success(message)
+
+
+def render_add_user_page() -> None:
+    """利用者のプルダウンで「新しい利用者を追加」を選んだときの画面。"""
+    st.subheader("新しい利用者を追加する")
+    st.caption(
+        "利用者の名前を入れて追加します。追加すると、その利用者が選ばれた状態で、"
+        "日報などをアップロードする画面に移ります。"
+    )
+    if not list_user_dirs(DATA_DIR):
+        st.info("まだ利用者がいません。最初の利用者を追加してください。")
+    with st.form("add_user_form", clear_on_submit=True):
+        name = st.text_input("利用者の名前")
+        submitted = st.form_submit_button("利用者を追加")
+    if not submitted:
+        return
+    created, error = create_user(DATA_DIR, name)
+    if error is not None:
+        st.error(error)
+        return
+    _flash(f"「{created.name}」さんを追加しました。続けて、日報などをアップロードしてください。")
+    st.session_state["_pending_user"] = created
+    st.session_state["_pending_display_mode"] = DATA_MANAGEMENT_MODE
+    st.rerun()
+
+
+def render_upload_row(user_dir: Path, kind, registered) -> None:
+    if registered is None:
+        st.markdown(f"**{kind.label}**　未登録")
+    else:
+        path, modified = registered
+        st.markdown(
+            f"**{kind.label}**　登録済み（{path.name}、"
+            f"{modified.month}/{modified.day} {modified:%H:%M} 更新）"
+        )
+    counter = st.session_state.get(f"_upload_counter_{user_dir.name}_{kind.key}", 0)
+    uploaded = st.file_uploader(
+        f"{kind.label}のExcelファイル（.xlsx）を選ぶ"
+        + ("　※ 今のファイルと置き換わります" if registered else ""),
+        type=["xlsx"],
+        key=f"upload_{user_dir.name}_{kind.key}_{counter}",
+    )
+    if uploaded is None:
+        return
+    error = save_uploaded_file(user_dir, kind, uploaded.getvalue())
+    if error is not None:
+        st.error(error)
+        return
+    _flash(f"「{user_dir.name}」さんの{kind.label}を登録しました。")
+    # アップロード欄を空に戻す（キーを変える）。取り込み後は同じ画面にとどまる。
+    st.session_state[f"_upload_counter_{user_dir.name}_{kind.key}"] = counter + 1
+    st.session_state["_pending_display_mode"] = DATA_MANAGEMENT_MODE
+    st.rerun()
+
+
+def render_data_management(user_dir: Path) -> None:
+    st.subheader("データ管理")
+    st.caption(
+        "選択中の利用者の、日報・セルフケアシート・欠席情報（Excel形式）を"
+        "アップロードします。同じ種類のファイルをもう一度アップロードすると、古いファイルは"
+        "新しいファイルに置き換わります。"
+    )
+    _show_flash_messages()
+
+    st.markdown(f"#### 「{user_dir.name}」さんのデータをアップロードする")
+    st.caption(
+        "対象の利用者は、左の「利用者」で切り替えられます。新しい利用者は、"
+        "「利用者」の「新しい利用者を追加」から追加できます。"
+    )
+    status = file_status(user_dir)
+    if status[DAILY.key] is None:
+        st.warning("日報がまだ登録されていません。日報をアップロードすると、グラフが表示されます。")
+    for kind in UPLOAD_KINDS:
+        render_upload_row(user_dir, kind, status[kind.key])
+        st.write("")
+    st.caption(
+        "欠席情報は、欠席フォームの回答（Excel）です。無い利用者は、アップロードしなくても"
+        "グラフは表示されます（出席率は、欠席情報があるときだけ計算できます）。"
+    )
+
+
+def render_quit_button() -> None:
+    """配布版（ダブルクリック起動）で、アプリを終了するボタンを出す。"""
+    if st.button("アプリを終了する"):
+        st.success("終了しています。このタブ（ウィンドウ）は閉じて構いません。")
+        # 画面にメッセージを返してから、サーバーを止める。
+        threading.Timer(1.5, os._exit, args=(0,)).start()
+        st.stop()
+
+
 def main() -> None:
     st.set_page_config(page_title="体調・睡眠分析ダッシュボード", layout="wide")
     st.title("体調・睡眠分析ダッシュボード")
@@ -780,14 +877,47 @@ def main() -> None:
         "（Open-Meteo）に送信して気圧・天気を取得します。"
     )
 
+    # 利用者の追加・アップロードの直後に、選択中の利用者や表示を切り替えるための予約。
+    # ウィジェットを作る前でないと値を変えられないため、ここで反映する。
+    pending_user = st.session_state.pop("_pending_user", None)
+    if pending_user is not None:
+        st.session_state["selected_user"] = pending_user
+    pending_mode = st.session_state.pop("_pending_display_mode", None)
+    if pending_mode is not None:
+        st.session_state["display_mode"] = pending_mode
+
+    # 利用者のプルダウンは、既存の利用者の最後に「新しい利用者を追加」を置く。
+    # 利用者が1人もいないときは、これだけが並ぶので、最初から追加の画面になる。
     user_dirs = list_user_dirs(DATA_DIR)
+    user_options = [*user_dirs, ADD_USER_OPTION]
+    if st.session_state.get("selected_user") not in user_options:
+        st.session_state.pop("selected_user", None)
     with st.sidebar:
         st.header("表示設定")
-        user_dir = (
-            st.selectbox("利用者", user_dirs, format_func=lambda p: p.name) if user_dirs else None
+        selected = st.selectbox(
+            "利用者",
+            user_options,
+            format_func=lambda o: o if o == ADD_USER_OPTION else o.name,
+            key="selected_user",
         )
 
+    if selected == ADD_USER_OPTION:
+        if paths.launched_by_launcher():
+            with st.sidebar:
+                render_quit_button()
+        render_add_user_page()
+        return
+    user_dir = selected
+
     df_all, weather_notice = load_source_dataframe(user_dir)
+    if df_all is None:
+        # 選んだ利用者の日報がまだ無いときは、アップロードの画面だけ出す。
+        if paths.launched_by_launcher():
+            with st.sidebar:
+                render_quit_button()
+        render_data_management(user_dir)
+        return
+
     # 気象データが無い場合は、気象の軸を選択肢・相関表から外す。
     axes = [(label, col) for label, col in AXIS_OPTIONS if df_all[col].notna().any()]
 
@@ -795,9 +925,15 @@ def main() -> None:
         axis_label = st.radio("縦軸（表示する項目）", [label for label, _ in axes])
         axis_col = dict(axes)[axis_label]
         period_label = st.radio("期間", PERIOD_OPTIONS)
-        display_mode = st.radio("表示", DISPLAY_MODE_OPTIONS)
+        display_mode = st.radio("表示", DISPLAY_MODE_OPTIONS, key="display_mode")
         if weather_notice:
             st.caption(weather_notice)
+        if paths.launched_by_launcher():
+            render_quit_button()
+
+    if display_mode == DATA_MANAGEMENT_MODE:
+        render_data_management(user_dir)
+        return
 
     df_all, condition_scheme = apply_condition_scheme(df_all)
     if condition_scheme is None:

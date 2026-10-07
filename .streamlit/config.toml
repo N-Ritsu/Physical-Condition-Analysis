@@ -1,0 +1,8 @@
+[server]
+# 自分のPC内だけで待ち受ける（ネットワーク上の他のPCから見えないようにする）。
+address = "127.0.0.1"
+headless = true
+
+[browser]
+# 利用状況の自動送信をしない。
+gatherUsageStats = false
