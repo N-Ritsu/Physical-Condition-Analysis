@@ -83,7 +83,8 @@ WEATHER_CONFIG_PATH = paths.weather_config_path()
 PERIOD_OPTIONS = ["直近1ヶ月", "全期間"]
 DATA_MANAGEMENT_MODE = "データ管理"
 ADD_USER_OPTION = "新しい利用者を追加"
-DISPLAY_MODE_OPTIONS = ["グラフ", "出席状況", "相関表", DATA_MANAGEMENT_MODE]
+DISPLAY_MODE_OPTIONS = ["グラフ", "出席状況", "相関表"]
+SETTINGS_OPTIONS = [DATA_MANAGEMENT_MODE]
 
 # 縦軸の選択肢にはないが、相関表には加える項目: (表示名, 列名)。
 # 天気は 雨=0・曇=1・晴=2 に数値化した値、体調ポイントはセルフケアシート由来（高いほど不調）。
@@ -247,7 +248,7 @@ def load_source_dataframe(user_dir: Path | None):
         df = attach_condition(df, selfcare_df)
     else:
         st.info(
-            "セルフケアシートがまだ登録されていません（左の「表示」の「データ管理」から"
+            "セルフケアシートがまだ登録されていません（左の「設定」の「データ管理」から"
             "アップロードできます）。"
             f"体調マーカーはすべて「{_CONDITION_DEFAULT_STYLE['label']}」として表示されます。"
         )
@@ -800,7 +801,7 @@ def render_add_user_page() -> None:
         return
     _flash(f"「{created.name}」さんを追加しました。続けて、日報などをアップロードしてください。")
     st.session_state["_pending_user"] = created
-    st.session_state["_pending_display_mode"] = DATA_MANAGEMENT_MODE
+    st.session_state["_open_data_management"] = True
     st.rerun()
 
 
@@ -829,7 +830,7 @@ def render_upload_row(user_dir: Path, kind, registered) -> None:
     _flash(f"「{user_dir.name}」さんの{kind.label}を登録しました。")
     # アップロード欄を空に戻す（キーを変える）。取り込み後は同じ画面にとどまる。
     st.session_state[f"_upload_counter_{user_dir.name}_{kind.key}"] = counter + 1
-    st.session_state["_pending_display_mode"] = DATA_MANAGEMENT_MODE
+    st.session_state["_open_data_management"] = True
     st.rerun()
 
 
@@ -859,6 +860,32 @@ def render_data_management(user_dir: Path) -> None:
     )
 
 
+def _show_page(
+    settings: str | None = None, display: bool = False, settings_selected: bool = False
+) -> None:
+    """「表示」と「設定」のどちらか一方だけを選ばれた状態にする。
+
+    - settings を渡す: その設定の画面を開く（「表示」の選択は外す）。
+    - display=True（「表示」を選んだときの処理）: 「設定」の選択を外す。
+    - settings_selected=True（「設定」を選んだときの処理）: 「表示」の選択を外す。
+    """
+    if settings is not None:
+        st.session_state["settings_mode"] = settings
+        st.session_state["display_mode"] = None
+    elif display:
+        st.session_state["settings_mode"] = None
+    elif settings_selected:
+        st.session_state["display_mode"] = None
+
+
+def _ensure_page_state() -> None:
+    """最初の表示は「グラフ」。両方とも未選択になっていたら、「グラフ」に戻す。"""
+    if st.session_state.get("display_mode") is None and (
+        st.session_state.get("settings_mode") is None
+    ):
+        st.session_state["display_mode"] = DISPLAY_MODE_OPTIONS[0]
+
+
 def render_quit_button() -> None:
     """配布版（ダブルクリック起動）で、アプリを終了するボタンを出す。"""
     if st.button("アプリを終了する"):
@@ -882,9 +909,9 @@ def main() -> None:
     pending_user = st.session_state.pop("_pending_user", None)
     if pending_user is not None:
         st.session_state["selected_user"] = pending_user
-    pending_mode = st.session_state.pop("_pending_display_mode", None)
-    if pending_mode is not None:
-        st.session_state["display_mode"] = pending_mode
+    if st.session_state.pop("_open_data_management", False):
+        _show_page(settings=DATA_MANAGEMENT_MODE)
+    _ensure_page_state()
 
     # 利用者のプルダウンは、既存の利用者の最後に「新しい利用者を追加」を置く。
     # 利用者が1人もいないときは、これだけが並ぶので、最初から追加の画面になる。
@@ -925,13 +952,32 @@ def main() -> None:
         axis_label = st.radio("縦軸（表示する項目）", [label for label, _ in axes])
         axis_col = dict(axes)[axis_label]
         period_label = st.radio("期間", PERIOD_OPTIONS)
-        display_mode = st.radio("表示", DISPLAY_MODE_OPTIONS, key="display_mode")
+        # 「表示」と「設定」は別のグループ。どちらか一方だけが選ばれた状態にする
+        # （片方を選ぶと、もう片方の選択は外れる）。
+        st.radio(
+            "表示",
+            DISPLAY_MODE_OPTIONS,
+            index=None,
+            key="display_mode",
+            on_change=_show_page,
+            kwargs={"display": True},
+        )
+        st.radio(
+            "設定",
+            SETTINGS_OPTIONS,
+            index=None,
+            key="settings_mode",
+            on_change=_show_page,
+            kwargs={"settings_selected": True},
+        )
+        display_mode = st.session_state["display_mode"]
+        settings_mode = st.session_state["settings_mode"]
         if weather_notice:
             st.caption(weather_notice)
         if paths.launched_by_launcher():
             render_quit_button()
 
-    if display_mode == DATA_MANAGEMENT_MODE:
+    if settings_mode == DATA_MANAGEMENT_MODE:
         render_data_management(user_dir)
         return
 
