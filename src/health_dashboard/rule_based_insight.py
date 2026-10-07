@@ -31,12 +31,10 @@ docs/05_prototype_creation_progress.md 参照）。
 - 個人ごとの悪化ボーダー（border_analysis.py）。ボーダー自体の説明は、振り返りコメントとは
   別にアプリ側で独立して表示する。ここでは、直近の値がボーダーを超えている場合に、
   締めの一文を注意喚起にするためだけに使う（別表示の内容と矛盾させないため）。
-- 「直近1週間」表示は期間内比較ができるほどデータがないため、直近2日分の値を
-  軸ごとの絶対的な良し悪し基準（トレンドや平均とは無関係）で評価する。
 
 締めの一文は上記の分析結果に応じて3パターンに出し分ける。
 - 直近に悪化傾向・外れ値・体調ストリーク・ばらつき（不安定期への接近、または常に
-  不安定な状態）・悪い水準の期間への接近・直近2日の絶対的な悪化のいずれかがあれば注意喚起
+  不安定な状態）・悪い水準の期間への接近のいずれかがあれば注意喚起
 - 直近は問題ないが期間内の安定期と不安定期、または良かった時期と悪かった時期の差が
   大きければ、比較による自己分析を促す
 - どちらもなければ、期間を通して安定している旨を伝える
@@ -86,23 +84,6 @@ _YEAR_WINDOW_DAYS = 28  # 「全期間」表示: 4週間を1つの単位とす�
 _MONTH_WINDOW_DAYS = 7  # 「直近1ヶ月」表示: 1週間を1つの単位とする
 _YEAR_WINDOW_MIN_POINTS = 3
 _MONTH_WINDOW_MIN_POINTS = 2
-
-# 「直近1週間」表示で、期間内比較の代わりに使う直近日数と絶対評価の基準。
-_RECENT_DAYS_FOR_ABSOLUTE_CHECK = 2
-# 軸ごとの「悪い」と判定する絶対的な基準値。方向性のない軸（入眠時間・起床時間）は対象外。
-# "higher"方向の軸は「この値未満は悪い」、"lower"方向の軸は「この値以上は悪い」という
-# 意味で扱う（_is_bad_value参照）。
-# quality_score: 2未満＝「悪い」カテゴリ（1）のみが該当。
-# night_awakenings: 元データが「中途覚醒３以上」を最悪カテゴリとして扱っているのに
-# 合わせ3回以上。
-# mood_wake/mood_commute: 1〜10スケールの中間（5）未満。
-_ABSOLUTE_BAD_THRESHOLD: dict[str, float] = {
-    "quality_score": 2,
-    "night_awakenings": 3,
-    "mood_wake": 5,
-    "mood_commute": 5,
-}
-
 
 def _format_date_md(d: dt.date) -> str:
     """グラフの横軸表示（月/日）に合わせた日付表記。"""
@@ -182,43 +163,6 @@ def _condition_streak_length(df: pd.DataFrame) -> int:
     return streak
 
 
-def _is_bad_value(axis_col: str, value: float | None) -> bool:
-    """軸ごとの絶対基準（過去の平均などとは無関係）で、値が「悪い」と言えるかを判定する。
-
-    方向性のない軸（入眠時間・起床時間）は評価対象外（常にFalse）。
-    """
-    if value is None:
-        return False
-    threshold = _ABSOLUTE_BAD_THRESHOLD.get(axis_col)
-    if threshold is None:
-        return False
-    direction = AXIS_DIRECTION.get(axis_col, "none")
-    if direction == "lower":
-        return value >= threshold
-    if direction == "higher":
-        return value < threshold
-    return False
-
-
-def _recent_days_absolute_warning(df: pd.DataFrame, axis_col: str) -> bool:
-    """直近数日の値を軸ごとの絶対基準で評価し、悪い値が含まれていればTrue。
-
-    「直近1週間」表示のように期間内比較ができるだけのデータがない場合に使う。
-    """
-    valid = df.dropna(subset=[axis_col]).sort_values("date")
-    if valid.empty:
-        return False
-    recent_values = valid[axis_col].tail(_RECENT_DAYS_FOR_ABSOLUTE_CHECK).tolist()
-    return any(_is_bad_value(axis_col, v) for v in recent_values)
-
-
-def _recent_absolute_phrase(axis_label: str, triggered: bool) -> str:
-    if not triggered:
-        return ""
-    n = _RECENT_DAYS_FOR_ABSOLUTE_CHECK
-    return f"直近{n}日の{axis_label}に、注意したい値が含まれています。"
-
-
 @dataclass
 class _PeriodAnalysis:
     period_noun: str
@@ -291,7 +235,7 @@ def _analyze_period(df: pd.DataFrame, axis_col: str, period_label: str) -> _Peri
     """期間内の安定度・水準を比較する。
 
     「全期間」表示では4週間単位、「直近1ヶ月」表示では1週間単位でローリング集計する。
-    「直近1週間」表示や、データ不足でウィンドウを2つ以上作れない場合はNoneを返す。
+    データ不足でウィンドウを2つ以上作れない場合や、未対応の期間の場合はNoneを返す。
     """
     if period_label not in ("全期間", "直近1ヶ月"):
         return None
@@ -529,13 +473,12 @@ def _closing_phrase(
     outlier_z: float | None,
     condition_streak_active: bool,
     period_analysis: _PeriodAnalysis | None,
-    recent_absolute_bad: bool,
     border_hit: bool = False,
 ) -> str:
     """分析結果に応じて締めの一文を出し分ける。
 
     1. 直近に悪化傾向・外れ値・体調ストリーク・ばらつき（不安定期への接近、または
-       期間を通して常に不安定）・悪い水準の期間への接近・直近数日の絶対的な悪化の
+       期間を通して常に不安定）・悪い水準の期間への接近・悪化ボーダーの超過の
        いずれかがあれば注意喚起。
     2. 直近は問題ないが、期間内の安定期と不安定期、または良かった時期と悪かった時期の
        差が大きい場合は、比較による自己分析を促す。
@@ -553,7 +496,6 @@ def _closing_phrase(
         or recent_unstable
         or recent_is_volatile
         or recent_bad_level
-        or recent_absolute_bad
         or border_hit
     )
     if is_concerning:
@@ -637,13 +579,6 @@ def generate_rule_based_insight(
     if stability_recent:
         sentences.append(stability_recent)
 
-    recent_absolute_bad = False
-    if period_label == "直近1週間":
-        recent_absolute_bad = _recent_days_absolute_warning(df, axis_col)
-        absolute_sentence = _recent_absolute_phrase(axis_label, recent_absolute_bad)
-        if absolute_sentence:
-            sentences.append(absolute_sentence)
-
     closing = _closing_phrase(
         axis_col,
         axis_label,
@@ -651,7 +586,6 @@ def generate_rule_based_insight(
         z,
         condition_streak_active,
         period_analysis,
-        recent_absolute_bad,
         border_hit,
     )
     sentences.append(closing)

@@ -259,11 +259,19 @@ def test_filter_by_period():
             "value": [1, 2, 3],
         }
     )
-    result = filter_by_period(df, "直近1週間")
-    assert list(result["value"]) == [3]
+    # 最新日(1/31)から30日間（1/2〜1/31）。1/1は含まれず、1/15は含まれる。
+    result = filter_by_period(df, "直近1ヶ月")
+    assert list(result["value"]) == [2, 3]
 
     result = filter_by_period(df, "全期間")
     assert list(result["value"]) == [1, 2, 3]
+
+
+def test_filter_by_period_rejects_removed_one_week_option():
+    df = pd.DataFrame({"date": [dt.date(2026, 1, 1)], "value": [1]})
+
+    with pytest.raises(ValueError):
+        filter_by_period(df, "直近1週間")
 
 
 def test_list_user_dirs_returns_sorted_subfolders_only(tmp_path):

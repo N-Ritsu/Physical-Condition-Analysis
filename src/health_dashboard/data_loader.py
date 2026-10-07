@@ -447,13 +447,11 @@ def attach_condition(df: pd.DataFrame, selfcare_df: pd.DataFrame) -> pd.DataFram
 
 
 def filter_by_period(df: pd.DataFrame, period: str) -> pd.DataFrame:
-    """期間フィルター: '直近1週間' / '直近1ヶ月' / '全期間'。"""
+    """期間フィルター: '直近1ヶ月' / '全期間'。"""
     if df.empty or period == "全期間":
         return df
     latest = max(df["date"])
-    if period == "直近1週間":
-        start = latest - dt.timedelta(days=6)
-    elif period == "直近1ヶ月":
+    if period == "直近1ヶ月":
         start = latest - dt.timedelta(days=29)
     else:
         raise ValueError(f"不明な期間指定です: {period}")

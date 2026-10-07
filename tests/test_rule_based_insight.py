@@ -210,14 +210,6 @@ def test_stability_window_month_view_finds_best_and_worst_week():
     assert "それぞれの期間での生活リズムを比較すると、重要な要素が見つかるかもしれません。" in text
 
 
-def test_stability_window_skipped_for_one_week_view():
-    values = _calm(5, 28) + _alternating(1, 10, 28)
-    df = _df(values, axis_col="mood_wake")
-    text = generate_rule_based_insight(df, "mood_wake", "気分（起床時）", "直近1週間")
-    assert "が最も安定し" not in text
-    assert "安定度に大きな違いは見られませんでした" not in text
-
-
 # --- 締めの一文の出し分け ---
 
 
@@ -301,46 +293,6 @@ def test_level_window_not_evaluated_for_direction_none_axis():
     assert "が最も良い状態" not in text
 
 
-# --- 直近1週間: 期間内比較の代わりに、直近数日を絶対基準で評価する ---
-
-
-def test_recent_absolute_warning_for_night_awakenings():
-    values = [0, 0, 0, 0, 3, 4]  # 直近2日とも3回以上（絶対基準で悪い）
-    df = _df(values, axis_col="night_awakenings")
-    text = generate_rule_based_insight(df, "night_awakenings", "中途覚醒回数", "直近1週間")
-    assert "直近2日の中途覚醒回数に、注意したい値が含まれています。" in text
-    assert "気になる変化が見られるため、気にかけてあげたほうが良いかもしれません。" in text
-
-
-def test_recent_absolute_ok_for_night_awakenings():
-    values = [0, 0, 0, 0, 1, 0]
-    df = _df(values, axis_col="night_awakenings")
-    text = generate_rule_based_insight(df, "night_awakenings", "中途覚醒回数", "直近1週間")
-    assert "注意したい値が含まれています" not in text
-
-
-def test_recent_absolute_warning_for_mood():
-    values = [8, 8, 8, 8, 4, 3]  # 直近2日が5未満
-    df = _df(values, axis_col="mood_wake")
-    text = generate_rule_based_insight(df, "mood_wake", "気分（起床時）", "直近1週間")
-    assert "直近2日の気分（起床時）に、注意したい値が含まれています。" in text
-
-
-def test_recent_absolute_warning_for_quality_score():
-    values = [3, 3, 3, 3, 3, 1]  # 直近1件が「悪い」カテゴリ
-    df = _df(values, axis_col="quality_score")
-    text = generate_rule_based_insight(df, "quality_score", "睡眠の質", "直近1週間")
-    assert "注意したい値が含まれています" in text
-
-
-def test_recent_absolute_check_not_applied_to_direction_none_axis():
-    # 入眠時間・起床時間は方向性がないため絶対評価の対象外
-    values = [21.0, 22.0, 23.0, 20.0, 21.5, 22.5]
-    df = _df(values, axis_col="bedtime_hours")
-    text = generate_rule_based_insight(df, "bedtime_hours", "入眠時間", "直近1週間")
-    assert "注意したい値が含まれています" not in text
-
-
 # --- グラフの背景色づけ用の期間（振り返りコメントが言及する期間） ---
 
 _START = dt.date(2026, 1, 1)
@@ -374,12 +326,6 @@ def test_highlight_periods_empty_when_no_notable_difference():
     df = _df(_calm(1, 56), axis_col="night_awakenings")
 
     assert find_highlight_periods(df, "night_awakenings", "全期間") == []
-
-
-def test_highlight_periods_empty_for_one_week_view():
-    df = _df(_calm(0, 7) + _calm(3, 7), axis_col="night_awakenings")
-
-    assert find_highlight_periods(df, "night_awakenings", "直近1週間") == []
 
 
 def test_resolve_segments_priority_red_over_green_over_blue():

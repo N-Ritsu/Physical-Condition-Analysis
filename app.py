@@ -70,8 +70,7 @@ from health_dashboard.weather import (
 
 DATA_DIR = Path(__file__).parent / "data"
 WEATHER_CONFIG_PATH = Path(__file__).parent / "weather_config.json"
-CONDITION_MODE_OPTIONS = ["個人ごとに自動で均等に分ける", "固定（点数の基準）"]
-PERIOD_OPTIONS = ["直近1週間", "直近1ヶ月", "全期間"]
+PERIOD_OPTIONS = ["直近1ヶ月", "全期間"]
 DISPLAY_MODE_OPTIONS = ["グラフ", "出席状況", "相関表"]
 
 # 縦軸の選択肢にはないが、相関表には加える項目: (表示名, 列名)。
@@ -147,7 +146,7 @@ def _apply_date_axis_ticks(fig: go.Figure, dates: list) -> None:
 
     表示期間が長い（「全期間」等）と、データ点の間隔に依存したPlotlyの既定の
     目盛りが不規則な間隔に見えてしまうため、月初・月半ばという分かりやすい
-    区切りに揃える。該当日がほぼ無い短い期間（直近1週間等）では、目盛りが
+    区切りに揃える。該当日がほぼ無い短い期間では、目盛りが
     1つ以下になり不自然になるため既定の目盛りのままにする。
     """
     valid = [d for d in dates if d is not None]
@@ -340,7 +339,7 @@ def build_figure(
         showlegend=False,
     )
     # 全期間表示（月初・月半ばの目盛り）と表記を揃えるため、既定の目盛り
-    # （直近1週間・直近1ヶ月など）も月/日形式にする。
+    # （直近1ヶ月など）も月/日形式にする。
     fig.update_xaxes(tickformat="%-m/%-d")
 
     if axis_col in ("bedtime_hours", "wake_hours"):
@@ -795,19 +794,17 @@ def main() -> None:
     with st.sidebar:
         axis_label = st.radio("縦軸（表示する項目）", [label for label, _ in axes])
         axis_col = dict(axes)[axis_label]
-        period_label = st.radio("期間", PERIOD_OPTIONS, index=1)
+        period_label = st.radio("期間", PERIOD_OPTIONS)
         display_mode = st.radio("表示", DISPLAY_MODE_OPTIONS)
-        condition_mode = st.radio("体調マーカーの区切り", CONDITION_MODE_OPTIONS)
         if weather_notice:
             st.caption(weather_notice)
 
-    condition_scheme = None
-    if condition_mode == CONDITION_MODE_OPTIONS[0]:
-        df_all, condition_scheme = apply_condition_scheme(df_all)
-        if condition_scheme is None:
-            st.sidebar.caption(
-                "体調の記録が少ないため、区切りを自動で決められません。固定の基準を使います。"
-            )
+    df_all, condition_scheme = apply_condition_scheme(df_all)
+    if condition_scheme is None:
+        st.sidebar.caption(
+            "体調の記録が少ないため、マーカーの区切りを自動で決められません。"
+            "目安の点数基準を使います。"
+        )
 
     if display_mode == "出席状況":
         render_attendance(df_all, user_dir)
@@ -848,8 +845,7 @@ def main() -> None:
             "※ この方は、点数が全体的に高めのため、「良好」の区分にも"
             f"{condition_scheme.best_band_max_points:g}ptの日が含まれています"
             f"（固定の基準では{CONDITION_CAUTION_POINTS}pt以上は「注意」以上）。"
-            "点数そのもので見たいときは、左の「体調マーカーの区切り」を「固定」に"
-            "切り替えてください。"
+            "点数そのものは、グラフのホバー表示や相関表の「体調」で確認できます。"
         )
     render_absence_legend(absences)
     render_highlight_legend(highlights)
