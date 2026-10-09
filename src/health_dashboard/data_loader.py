@@ -7,11 +7,23 @@
 from __future__ import annotations
 
 import datetime as dt
+import io
 import re
 from pathlib import Path
 
 import openpyxl
 import pandas as pd
+
+
+def _excel_buffer(path: str | Path) -> io.BytesIO:
+    """Excelファイルを丸ごとメモリに読み込む。
+
+    Windowsでは、開いたままのファイルを削除・置き換えできない（アップロードの置き換えが
+    失敗する）。openpyxlは、版や状況によって読み終わった後もファイルを開いたままにする
+    ことがあるため、ファイルそのものは開かず、読み込んだ内容から解析する。
+    日報・セルフケアシート・欠席情報は小さいファイルなので、メモリの負担は問題にならない。
+    """
+    return io.BytesIO(Path(path).read_bytes())
 
 # 利用者フォルダ内で、ファイル名にこの文字列を含むものを該当ファイルとみなす。
 DAILY_REPORT_KEYWORD = "日報"
@@ -155,7 +167,7 @@ def find_absence_file(user_dir: str | Path) -> Path | None:
 
 def load_absence_dates(path: str | Path) -> list[dt.date]:
     """欠席フォームの回答から、欠席日（回答日時の日付）を重複なしで返す。"""
-    raw = pd.read_excel(path, engine="openpyxl")
+    raw = pd.read_excel(_excel_buffer(path), engine="openpyxl")
     if COL_ABSENCE_TIMESTAMP not in raw.columns:
         raise ValueError(f"「{COL_ABSENCE_TIMESTAMP}」列が見つかりません: {path}")
     timestamps = pd.to_datetime(raw[COL_ABSENCE_TIMESTAMP], errors="coerce").dropna()
@@ -181,7 +193,7 @@ def load_absence_records(path: str | Path) -> list[tuple[dt.date, str]]:
 
     同じ日に複数の回答がある場合は、優先度の高い分類（精神的＞体調＞その他）を採用する。
     """
-    raw = pd.read_excel(path, engine="openpyxl")
+    raw = pd.read_excel(_excel_buffer(path), engine="openpyxl")
     if COL_ABSENCE_TIMESTAMP not in raw.columns:
         raise ValueError(f"「{COL_ABSENCE_TIMESTAMP}」列が見つかりません: {path}")
     timestamps = pd.to_datetime(raw[COL_ABSENCE_TIMESTAMP], errors="coerce")
@@ -202,9 +214,7 @@ def load_absence_records(path: str | Path) -> list[tuple[dt.date, str]]:
 
 def find_header_row(path: str | Path) -> int:
     """「日付」列を含む行を探し、pandasのheader引数用の0始まり行番号を返す。"""
-    # read_onlyで開いたファイルは、閉じるまで開いたままになる。Windowsでは、開いたままの
-    # ファイルを削除・置き換えできない（アップロードの置き換えが失敗する）ため、必ず閉じる。
-    wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    wb = openpyxl.load_workbook(_excel_buffer(path), data_only=True)
     try:
         ws = wb.worksheets[0]
         for row_idx, row in enumerate(ws.iter_rows(values_only=True)):
@@ -334,7 +344,7 @@ def load_daily_reports(path: str | Path) -> pd.DataFrame:
         mood_wake, mood_commute, mood_type
     """
     header_row = find_header_row(path)
-    raw = pd.read_excel(path, header=header_row, engine="openpyxl")
+    raw = pd.read_excel(_excel_buffer(path), header=header_row, engine="openpyxl")
     raw = raw.dropna(subset=[COL_DATE]).copy()
 
     missing = [c for c in REQUIRED_COLUMNS if c not in raw.columns]
@@ -413,8 +423,7 @@ def load_selfcare_points(path: str | Path) -> pd.DataFrame:
     シートが複数ある場合はすべて対象にし、同じ日付が複数シートに存在する場合は
     最初に見つかったものを採用する。
     """
-    # Windowsでは、開いたままのファイルを削除・置き換えできないため、必ず閉じる。
-    wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    wb = openpyxl.load_workbook(_excel_buffer(path), data_only=True)
     try:
         points_by_date = _collect_selfcare_points(wb)
     finally:

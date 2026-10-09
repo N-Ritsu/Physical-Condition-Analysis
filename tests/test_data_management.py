@@ -10,10 +10,82 @@ from health_dashboard.data_management import (
     DAILY,
     SELFCARE,
     create_user,
+    delete_user,
     file_status,
     save_uploaded_file,
     validate_user_name,
 )
+
+# --- 利用者の削除 ---
+
+
+def test_delete_user_removes_folder_and_all_data(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    user_dir, _ = create_user(data_dir, "削除する人")
+    other_dir, _ = create_user(data_dir, "残る人")
+    assert save_uploaded_file(user_dir, DAILY, _daily_bytes(tmp_path)) is None
+    (user_dir / "memo").mkdir()
+    (user_dir / "memo" / "x.txt").write_text("x")
+    assert save_uploaded_file(other_dir, DAILY, _daily_bytes(tmp_path)) is None
+
+    assert delete_user(data_dir, user_dir) is None
+
+    assert not user_dir.exists()
+    assert [p.name for p in list_user_dirs(data_dir)] == ["残る人"]
+    assert find_user_files(other_dir)[0] is not None  # ほかの利用者のデータは残る
+
+
+def test_delete_user_removes_read_only_files(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    user_dir, _ = create_user(data_dir, "A")
+    locked = user_dir / "日報.xlsx"
+    locked.write_bytes(b"x")
+    locked.chmod(0o444)
+    user_dir.chmod(0o755)
+
+    assert delete_user(data_dir, user_dir) is None
+    assert not user_dir.exists()
+
+
+def test_delete_user_refuses_folders_outside_data_dir(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("x")
+    nested = data_dir / "A" / "nested"
+    nested.mkdir(parents=True)
+
+    assert delete_user(data_dir, outside) is not None
+    assert delete_user(data_dir, data_dir) is not None
+    assert delete_user(data_dir, nested) is not None
+    assert (outside / "keep.txt").exists()
+    assert nested.exists()
+
+
+def test_delete_user_missing_folder_returns_message(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    assert delete_user(data_dir, data_dir / "いない人") is not None
+
+
+def test_delete_user_does_not_follow_symlink(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "keep.txt").write_text("x")
+    link = data_dir / "link"
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        pytest.skip("シンボリックリンクを作れない環境")
+
+    assert delete_user(data_dir, link) is not None
+    assert (target / "keep.txt").exists()
 
 # --- テスト用のExcel（実データと同じ形式の最小限） ---
 
