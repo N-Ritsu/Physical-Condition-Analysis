@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import unicodedata
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
@@ -69,6 +70,42 @@ def load_weather_location(config_path: str | Path) -> tuple[float, float] | None
     if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
         return None
     return latitude, longitude
+
+
+def parse_coordinate(
+    text: str, name: str, low: float, high: float
+) -> tuple[float | None, str | None]:
+    """画面で入力された緯度・経度の文字を数値にする。戻り値は (値, エラーメッセージ)。
+
+    全角の数字や空白、前後の空白は受け付ける（支援員がそのまま貼り付けても読めるように）。
+    """
+    cleaned = unicodedata.normalize("NFKC", text).strip().rstrip("°").strip()
+    if not cleaned:
+        return None, f"{name}を入力してください。"
+    try:
+        value = float(cleaned)
+    except ValueError:
+        return None, f"{name}は数字で入力してください（例: 35.6812）。"
+    if not (low <= value <= high):
+        return None, f"{name}は {low:g} 〜 {high:g} の範囲で入力してください。"
+    return value, None
+
+
+def save_weather_location(
+    config_path: str | Path, latitude: float | None, longitude: float | None
+) -> None:
+    """緯度・経度を設定ファイルに書く。両方Noneなら設定を解除する（気象データを使わない）。"""
+    path = Path(config_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(path.name + ".tmp")
+    try:
+        temp.write_text(
+            json.dumps({"latitude": latitude, "longitude": longitude}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temp.replace(path)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def parse_weather_response(payload: dict) -> pd.DataFrame:

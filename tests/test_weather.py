@@ -11,7 +11,9 @@ from health_dashboard.weather import (
     classify_weather,
     fetch_weather,
     load_weather_location,
+    parse_coordinate,
     parse_weather_response,
+    save_weather_location,
 )
 
 
@@ -126,6 +128,48 @@ def test_load_weather_location_invalid_returns_none(tmp_path, content):
 
 def test_load_weather_location_missing_file_returns_none(tmp_path):
     assert load_weather_location(tmp_path / "none.json") is None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("35.6812", 35.6812),
+        (" 35.68 ", 35.68),
+        ("３５．６８", 35.68),  # 全角
+        ("35.68°", 35.68),
+        ("-12", -12.0),
+    ],
+)
+def test_parse_coordinate_accepts_common_inputs(text, expected):
+    assert parse_coordinate(text, "緯度", -90, 90) == (expected, None)
+
+
+@pytest.mark.parametrize("text", ["", "  ", "abc", "35,68", "nan", "inf", "91", "-90.1"])
+def test_parse_coordinate_rejects_bad_inputs(text):
+    value, error = parse_coordinate(text, "緯度", -90, 90)
+
+    assert value is None
+    assert "緯度" in error
+
+
+def test_save_weather_location_roundtrip(tmp_path):
+    path = tmp_path / "home" / "weather_config.json"
+
+    save_weather_location(path, 35.6812, 139.7671)
+
+    assert load_weather_location(path) == (35.6812, 139.7671)
+    # 一時ファイルが残らない
+    assert [p.name for p in path.parent.iterdir()] == ["weather_config.json"]
+
+
+def test_save_weather_location_none_clears_setting(tmp_path):
+    path = tmp_path / "weather_config.json"
+    save_weather_location(path, 35.0, 139.0)
+
+    save_weather_location(path, None, None)
+
+    assert load_weather_location(path) is None
+    assert json.loads(path.read_text(encoding="utf-8")) == {"latitude": None, "longitude": None}
 
 
 class _FakeResponse(io.BytesIO):

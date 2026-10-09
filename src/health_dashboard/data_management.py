@@ -12,6 +12,10 @@ xlsxを見分ける既存の仕組みに合う）。
 from __future__ import annotations
 
 import datetime as dt
+import os
+import shutil
+import stat
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -81,6 +85,33 @@ def create_user(data_dir: Path, name: str) -> tuple[Path | None, str | None]:
     except OSError as exc:
         return None, f"フォルダを作れませんでした（{exc.strerror or '原因不明'}）。"
     return user_dir, None
+
+
+def _force_writable(function, path, _exc_info) -> None:
+    """読み取り専用のファイルがあっても消せるようにする（Windowsで削除に失敗する原因）。"""
+    os.chmod(path, stat.S_IWRITE)
+    function(path)
+
+
+def delete_user(data_dir: Path, user_dir: Path) -> str | None:
+    """利用者のフォルダを、中のデータごと完全に削除する。成功ならNone、失敗ならエラーメッセージ。
+
+    元に戻せない（ごみ箱には入らない）。data_dirの直下にある利用者のフォルダ以外は消さない。
+    """
+    if user_dir.is_symlink() or not user_dir.is_dir():
+        return "この利用者のフォルダが見つかりません。"
+    if user_dir.resolve().parent != data_dir.resolve() or user_dir.name.startswith("."):
+        return "この利用者は削除できません。"
+    # onerror は Python 3.12 から非推奨で、後継の onexc に置き換わっている。
+    handler = {"onexc" if sys.version_info >= (3, 12) else "onerror": _force_writable}
+    try:
+        shutil.rmtree(user_dir, **handler)
+    except OSError as exc:
+        return (
+            f"削除しきれませんでした（{exc.strerror or '原因不明'}）。"
+            "Excelでこの利用者のファイルを開いている場合は閉じてから、もう一度試してください。"
+        )
+    return None
 
 
 def _validate(kind: UploadKind, path: Path) -> None:

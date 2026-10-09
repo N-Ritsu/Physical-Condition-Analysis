@@ -55,6 +55,7 @@ from health_dashboard.data_management import (
     DAILY,
     UPLOAD_KINDS,
     create_user,
+    delete_user,
     file_status,
     save_uploaded_file,
 )
@@ -76,15 +77,19 @@ from health_dashboard.weather import (
     attach_weather,
     fetch_weather,
     load_weather_location,
+    parse_coordinate,
+    save_weather_location,
 )
 
 DATA_DIR = paths.data_dir()
 WEATHER_CONFIG_PATH = paths.weather_config_path()
 PERIOD_OPTIONS = ["直近1ヶ月", "全期間"]
 DATA_MANAGEMENT_MODE = "データ管理"
+WEATHER_LOCATION_MODE = "緯度・経度の設定"
+DELETE_USER_MODE = "利用者の削除"
 ADD_USER_OPTION = "新しい利用者を追加"
 DISPLAY_MODE_OPTIONS = ["グラフ", "出席状況", "相関表"]
-SETTINGS_OPTIONS = [DATA_MANAGEMENT_MODE]
+SETTINGS_OPTIONS = [DATA_MANAGEMENT_MODE, WEATHER_LOCATION_MODE, DELETE_USER_MODE]
 
 # 縦軸の選択肢にはないが、相関表には加える項目: (表示名, 列名)。
 # 天気は 雨=0・曇=1・晴=2 に数値化した値、体調ポイントはセルフケアシート由来（高いほど不調）。
@@ -223,8 +228,8 @@ def _attach_weather_to(df: pd.DataFrame) -> tuple[pd.DataFrame, str | None]:
     location = load_weather_location(WEATHER_CONFIG_PATH)
     if location is None:
         return attach_weather(df, None), (
-            "気圧・天気は未設定です。weather_config.json に施設の緯度・経度を"
-            "書くと表示できます。"
+            "気圧・天気は未設定です。左の「設定」の「緯度・経度の設定」で施設の"
+            "緯度・経度を入れると表示できます。"
         )
     try:
         weather_df = _fetch_weather_cached(*location, min(df["date"]), max(df["date"]))
@@ -785,6 +790,7 @@ def _show_flash_messages() -> None:
 def render_add_user_page() -> None:
     """利用者のプルダウンで「新しい利用者を追加」を選んだときの画面。"""
     st.subheader("新しい利用者を追加する")
+    _show_flash_messages()
     st.caption(
         "利用者の名前を入れて追加します。追加すると、その利用者が選ばれた状態で、"
         "日報などをアップロードする画面に移ります。"
@@ -859,6 +865,96 @@ def render_data_management(user_dir: Path) -> None:
         "欠席情報は、欠席フォームの回答（Excel）です。無い利用者は、アップロードしなくても"
         "グラフは表示されます（出席率は、欠席情報があるときだけ計算できます）。"
     )
+
+
+def render_weather_location() -> None:
+    st.subheader("緯度・経度の設定")
+    st.caption(
+        "施設の緯度・経度を入れると、気圧・天気のグラフと相関表が使えるようになります。"
+        "全員共通の値で、利用者ごとの設定は要りません。"
+    )
+    _show_flash_messages()
+
+    current = load_weather_location(WEATHER_CONFIG_PATH)
+    if current is None:
+        st.info("今は未設定です（気圧・天気は表示されません。通信もしません）。")
+    else:
+        st.success(f"今の設定: 緯度 {current[0]:g}、経度 {current[1]:g}")
+
+    with st.form("weather_location_form"):
+        latitude_text = st.text_input(
+            "緯度（-90 〜 90）", value="" if current is None else f"{current[0]:g}"
+        )
+        longitude_text = st.text_input(
+            "経度（-180 〜 180）", value="" if current is None else f"{current[1]:g}"
+        )
+        submitted = st.form_submit_button("この内容で設定する")
+    st.caption(
+        "調べ方: Googleマップで施設の場所を右クリックすると、「35.6812, 139.7671」のような"
+        "数字が出ます。1つ目が緯度、2つ目が経度です。"
+    )
+    st.caption(
+        "外部への送信: 気圧・天気を取るため、この緯度・経度（小数点以下2桁に丸めた値）と"
+        "日付の範囲だけを気象API（Open-Meteo）に送ります。利用者の名前・日報・セルフケアの"
+        "内容は送りません。"
+    )
+
+    if submitted:
+        latitude, lat_error = parse_coordinate(latitude_text, "緯度", -90, 90)
+        longitude, lon_error = parse_coordinate(longitude_text, "経度", -180, 180)
+        errors = [e for e in (lat_error, lon_error) if e is not None]
+        if errors:
+            for error in errors:
+                st.error(error)
+            return
+        try:
+            save_weather_location(WEATHER_CONFIG_PATH, latitude, longitude)
+        except OSError as exc:
+            st.error(f"設定を保存できませんでした（{exc.strerror or '原因不明'}）。")
+            return
+        _flash("緯度・経度を設定しました。")
+        st.rerun()
+
+    if current is not None and st.button("設定を解除する（気圧・天気を使わない）"):
+        try:
+            save_weather_location(WEATHER_CONFIG_PATH, None, None)
+        except OSError as exc:
+            st.error(f"設定を解除できませんでした（{exc.strerror or '原因不明'}）。")
+            return
+        _flash("緯度・経度の設定を解除しました。")
+        st.rerun()
+
+
+def render_delete_user(user_dir: Path) -> None:
+    st.subheader("利用者の削除")
+    st.caption("選択中の利用者を、日報・セルフケアシート・欠席情報などのデータごと削除します。")
+    _show_flash_messages()
+
+    st.markdown(f"#### 「{user_dir.name}」さんを削除する")
+    st.warning(
+        "削除すると、この利用者のデータはすべて消え、元に戻せません（ごみ箱にも残りません）。"
+        "必要なら、先にExcelのデータをほかの場所に控えておいてください。"
+    )
+    st.caption("別の利用者を削除するときは、左の「利用者」で切り替えてください。")
+    with st.form("delete_user_form", clear_on_submit=True):
+        confirmation = st.text_input(
+            f"確認のため、利用者の名前「{user_dir.name}」をそのまま入力してください"
+        )
+        submitted = st.form_submit_button("この利用者とデータを削除する")
+    if not submitted:
+        return
+    if confirmation.strip() != user_dir.name:
+        st.error("入力された名前が、削除する利用者の名前と一致しません。削除していません。")
+        return
+    error = delete_user(DATA_DIR, user_dir)
+    if error is not None:
+        st.error(error)
+        return
+    _flash(f"「{user_dir.name}」さんと、そのデータを削除しました。")
+    # 選択中の利用者がいなくなるので、利用者の選択は自動的に先頭へ戻る。
+    # 続けて別の利用者を消してしまわないよう、削除の画面からは離れる。
+    st.session_state["_open_data_management"] = True
+    st.rerun()
 
 
 def _show_page(
@@ -938,31 +1034,28 @@ def main() -> None:
     user_dir = selected
 
     df_all, weather_notice = load_source_dataframe(user_dir)
-    if df_all is None:
-        # 選んだ利用者の日報がまだ無いときは、アップロードの画面だけ出す。
-        if paths.launched_by_launcher():
-            with st.sidebar:
-                render_quit_button()
-        render_data_management(user_dir)
-        return
-
-    # 気象データが無い場合は、気象の軸を選択肢・相関表から外す。
-    axes = [(label, col) for label, col in AXIS_OPTIONS if df_all[col].notna().any()]
+    has_data = df_all is not None
+    if not has_data and st.session_state.get("settings_mode") is None:
+        # 選んだ利用者の日報がまだ無いときは、グラフは出せないので、アップロードの画面を開く。
+        _show_page(settings=DATA_MANAGEMENT_MODE)
 
     with st.sidebar:
-        axis_label = st.radio("縦軸（表示する項目）", [label for label, _ in axes])
-        axis_col = dict(axes)[axis_label]
-        period_label = st.radio("期間", PERIOD_OPTIONS)
-        # 「表示」と「設定」は別のグループ。どちらか一方だけが選ばれた状態にする
-        # （片方を選ぶと、もう片方の選択は外れる）。
-        st.radio(
-            "表示",
-            DISPLAY_MODE_OPTIONS,
-            index=None,
-            key="display_mode",
-            on_change=_show_page,
-            kwargs={"display": True},
-        )
+        if has_data:
+            # 気象データが無い場合は、気象の軸を選択肢・相関表から外す。
+            axes = [(label, col) for label, col in AXIS_OPTIONS if df_all[col].notna().any()]
+            axis_label = st.radio("縦軸（表示する項目）", [label for label, _ in axes])
+            axis_col = dict(axes)[axis_label]
+            period_label = st.radio("期間", PERIOD_OPTIONS)
+            # 「表示」と「設定」は別のグループ。どちらか一方だけが選ばれた状態にする
+            # （片方を選ぶと、もう片方の選択は外れる）。
+            st.radio(
+                "表示",
+                DISPLAY_MODE_OPTIONS,
+                index=None,
+                key="display_mode",
+                on_change=_show_page,
+                kwargs={"display": True},
+            )
         st.radio(
             "設定",
             SETTINGS_OPTIONS,
@@ -971,7 +1064,7 @@ def main() -> None:
             on_change=_show_page,
             kwargs={"settings_selected": True},
         )
-        display_mode = st.session_state["display_mode"]
+        display_mode = st.session_state.get("display_mode")
         settings_mode = st.session_state["settings_mode"]
         if weather_notice:
             st.caption(weather_notice)
@@ -980,6 +1073,12 @@ def main() -> None:
 
     if settings_mode == DATA_MANAGEMENT_MODE:
         render_data_management(user_dir)
+        return
+    if settings_mode == WEATHER_LOCATION_MODE:
+        render_weather_location()
+        return
+    if settings_mode == DELETE_USER_MODE:
+        render_delete_user(user_dir)
         return
 
     df_all, condition_scheme = apply_condition_scheme(df_all)
