@@ -60,6 +60,7 @@ from health_dashboard.data_management import (
     save_uploaded_file,
 )
 from health_dashboard.formatting import format_axis_value, format_clock
+from health_dashboard.idle_shutdown import IDLE_GRACE_SECONDS, start_idle_watcher
 from health_dashboard.rule_based_insight import (
     HighlightPeriod,
     find_highlight_periods,
@@ -984,8 +985,19 @@ def _ensure_page_state() -> None:
         st.session_state["display_mode"] = DISPLAY_MODE_OPTIONS[0]
 
 
+@st.cache_resource
+def _start_idle_watcher() -> bool:
+    """ブラウザが全て閉じられたら終了する監視を、サーバーの起動後に1回だけ始める。"""
+    return start_idle_watcher()
+
+
 def render_quit_button() -> None:
     """配布版（ダブルクリック起動）で、アプリを終了するボタンを出す。"""
+    if _start_idle_watcher():
+        st.caption(
+            "ブラウザを閉じると、約"
+            f"{IDLE_GRACE_SECONDS // 60}分後にアプリは自動で終了します。"
+        )
     if st.button("アプリを終了する"):
         st.success("終了しています。このタブ（ウィンドウ）は閉じて構いません。")
         # 画面にメッセージを返してから、サーバーを止める。
