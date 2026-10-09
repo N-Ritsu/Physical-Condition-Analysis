@@ -951,8 +951,9 @@ def render_delete_user(user_dir: Path) -> None:
         st.error(error)
         return
     _flash(f"「{user_dir.name}」さんと、そのデータを削除しました。")
-    # 選択中の利用者がいなくなるので、利用者の選択は自動的に先頭へ戻る。
-    # 続けて別の利用者を消してしまわないよう、削除の画面からは離れる。
+    # 選択中の利用者がいなくなるので、利用者の選択は、main()で先頭の利用者
+    # （いなければ「新しい利用者を追加」）に切り替わる。続けて別の利用者を消してしまわないよう、
+    # 削除の画面からは離れる。
     st.session_state["_open_data_management"] = True
     st.rerun()
 
@@ -1015,7 +1016,10 @@ def main() -> None:
     user_dirs = list_user_dirs(DATA_DIR)
     user_options = [*user_dirs, ADD_USER_OPTION]
     if st.session_state.get("selected_user") not in user_options:
-        st.session_state.pop("selected_user", None)
+        # 選ばれていた利用者がいなくなった（削除した）ときは、先頭の利用者（いなければ
+        # 「新しい利用者を追加」）に切り替える。値を消すだけだと、ブラウザ側の選択欄が
+        # 前の名前のまま残るため、新しい値を明示的に指定する。
+        st.session_state["selected_user"] = user_options[0]
     with st.sidebar:
         st.header("表示設定")
         selected = st.selectbox(
