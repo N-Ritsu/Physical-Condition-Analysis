@@ -65,6 +65,9 @@ Step "依存ライブラリを取得する（Windows 64bit / Python $PythonVersi
 $sitePackages = Join-Path $pyDir "Lib\site-packages"
 # Microsoft Store版のPythonなどは「ユーザー用にインストール」が既定で、--target と併用できない。
 $env:PIP_USER = "0"
+# requirements-lock.txt は日本語のコメントを含むUTF-8。日本語のWindowsの既定（cp932）で
+# 読まれて失敗しないよう、PythonをUTF-8モードで動かす。
+$env:PYTHONUTF8 = "1"
 # テスト済みの版を固定したファイルがあれば、それを使う（無ければ、その時点の最新版）。
 $lockFile = Join-Path $repo "requirements-lock.txt"
 $requirements = if (Test-Path -LiteralPath $lockFile) { $lockFile } else { Join-Path $repo "requirements.txt" }
