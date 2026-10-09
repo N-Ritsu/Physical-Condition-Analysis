@@ -258,7 +258,8 @@ def load_source_dataframe(user_dir: Path | None):
 
 
 def _condition_hover_text(label, points) -> str:
-    if label is None:
+    # pandas 3以降は、文字列の列の欠損が None でなく NaN になる。どちらでも「記録なし」にする。
+    if label is None or pd.isna(label):
         return _CONDITION_DEFAULT_STYLE["label"]
     if points is None or pd.isna(points):
         return label

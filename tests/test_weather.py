@@ -70,7 +70,7 @@ def test_parse_weather_response_missing_precipitation_gives_no_label():
 
     result = parse_weather_response(payload)
 
-    assert result.loc[0, "weather_label"] is None
+    assert pd.isna(result.loc[0, "weather_label"])  # pandas 2ではNone、3ではNaN
     assert result.loc[1, "weather_label"] == "晴"
 
 

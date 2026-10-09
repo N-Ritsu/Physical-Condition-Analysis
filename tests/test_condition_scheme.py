@@ -137,7 +137,7 @@ def test_apply_condition_scheme_relabels_and_keeps_missing_as_none():
     relabeled, scheme = apply_condition_scheme(df)
 
     assert scheme is not None
-    assert relabeled["condition_label"].iloc[-1] is None
+    assert pd.isna(relabeled["condition_label"].iloc[-1])  # pandas 2ではNone、3ではNaN
     assert set(relabeled["condition_label"].dropna()) <= {"良好", "普通", "注意", "警戒", "異常"}
     assert df["condition_label"].iloc[0] == "固定"  # 元のDataFrameは変えない
 

@@ -202,11 +202,16 @@ def load_absence_records(path: str | Path) -> list[tuple[dt.date, str]]:
 
 def find_header_row(path: str | Path) -> int:
     """「日付」列を含む行を探し、pandasのheader引数用の0始まり行番号を返す。"""
+    # read_onlyで開いたファイルは、閉じるまで開いたままになる。Windowsでは、開いたままの
+    # ファイルを削除・置き換えできない（アップロードの置き換えが失敗する）ため、必ず閉じる。
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
-    ws = wb.worksheets[0]
-    for row_idx, row in enumerate(ws.iter_rows(values_only=True)):
-        if COL_DATE in row:
-            return row_idx
+    try:
+        ws = wb.worksheets[0]
+        for row_idx, row in enumerate(ws.iter_rows(values_only=True)):
+            if COL_DATE in row:
+                return row_idx
+    finally:
+        wb.close()
     raise ValueError(f"「{COL_DATE}」列を含むヘッダー行が見つかりません: {path}")
 
 
@@ -379,17 +384,7 @@ def _find_remarks_column(first_row: tuple) -> int:
     return 26
 
 
-def load_selfcare_points(path: str | Path) -> pd.DataFrame:
-    """セルフケアシート（月ごとにシートが分かれた〇/△/✕チェック表）から、
-    日ごとの体調ポイント（不調ほど高得点）を集計する。
-
-    〇=0点・△=1点・✕=2点として、日付ごとに「睡眠・食事・ストレス」「良好サイン」
-    「注意サイン」「悪化サイン」「回復対処」の全チェック項目（備考欄を除く）を合算する。
-    シートが複数ある場合はすべて対象にし、同じ日付が複数シートに存在する場合は
-    最初に見つかったものを採用する。
-    """
-    wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
-
+def _collect_selfcare_points(wb) -> dict[dt.date, int]:
     points_by_date: dict[dt.date, int] = {}
     for ws in wb.worksheets:
         first_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
@@ -406,6 +401,24 @@ def load_selfcare_points(path: str | Path) -> pd.DataFrame:
                 continue
             points = sum(SELFCARE_MARK_TO_POINTS.get(m, 0) for m in marks if m is not None)
             points_by_date.setdefault(date_value.date(), points)
+    return points_by_date
+
+
+def load_selfcare_points(path: str | Path) -> pd.DataFrame:
+    """セルフケアシート（月ごとにシートが分かれた〇/△/✕チェック表）から、
+    日ごとの体調ポイント（不調ほど高得点）を集計する。
+
+    〇=0点・△=1点・✕=2点として、日付ごとに「睡眠・食事・ストレス」「良好サイン」
+    「注意サイン」「悪化サイン」「回復対処」の全チェック項目（備考欄を除く）を合算する。
+    シートが複数ある場合はすべて対象にし、同じ日付が複数シートに存在する場合は
+    最初に見つかったものを採用する。
+    """
+    # Windowsでは、開いたままのファイルを削除・置き換えできないため、必ず閉じる。
+    wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    try:
+        points_by_date = _collect_selfcare_points(wb)
+    finally:
+        wb.close()
 
     if not points_by_date:
         return pd.DataFrame(columns=["date", "condition_points"])

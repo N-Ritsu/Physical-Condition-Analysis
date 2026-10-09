@@ -247,7 +247,7 @@ def test_attach_condition():
     assert merged.loc[0, "condition_points"] == 7
     assert merged.loc[0, "condition_label"] == "異常"
     assert pd.isna(merged.loc[1, "condition_points"])
-    assert merged.loc[1, "condition_label"] is None
+    assert pd.isna(merged.loc[1, "condition_label"])  # pandas 2ではNone、3ではNaN
 
 
 def test_filter_by_period():

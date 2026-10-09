@@ -1,7 +1,7 @@
 """データ・設定ファイルの置き場所。
 
 通常（ソースから実行）はリポジトリ直下を使う。配布版では、起動プログラム
-（launcher.py）が環境変数 HEALTH_DASHBOARD_HOME に利用者のドキュメント内のフォルダを
+（launcher.py）が環境変数 HEALTH_DASHBOARD_HOME に、PC内の専用フォルダ（%LOCALAPPDATA%内）を
 設定するため、アプリ本体を更新してもデータや設定が消えない。
 """
 

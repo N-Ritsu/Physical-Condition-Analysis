@@ -2,7 +2,7 @@
 
 コマンドを打たなくても、ダッシュボードを起動してブラウザで開く。
 
-- データ・設定の置き場所（ドキュメント内のフォルダ）を用意する。
+- データ・設定の置き場所（%LOCALAPPDATA% の「体調分析ダッシュボード」フォルダ）を用意する。
 - すでに起動していれば、2つ目は起動せず、ブラウザだけ開く。
 - 自分のPC内だけ（127.0.0.1）で待ち受け、利用状況の自動送信を止める。
 - 起動に失敗したときは、黒い画面が無くても分かるよう、メッセージ画面とログで知らせる。
@@ -33,10 +33,18 @@ WEATHER_CONFIG_TEMPLATE = {"latitude": None, "longitude": None}
 
 
 def default_home() -> Path:
-    """配布版でデータ・設定を置くフォルダ（ドキュメント内）。"""
+    """配布版でデータ・設定を置くフォルダ。
+
+    「ドキュメント」ではなく、PC内だけにある %LOCALAPPDATA%（AppData/Local）に置く。
+    ドキュメント・デスクトップは、OneDriveの「フォルダーのバックアップ」で自動的にクラウドへ
+    同期されることがあり、利用者の健康データが外部に送られてしまうため。
+    """
     if os.environ.get(HOME_ENV_VAR):
         return Path(os.environ[HOME_ENV_VAR])
-    return Path.home() / "Documents" / HOME_FOLDER_NAME
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        return Path(local_app_data) / HOME_FOLDER_NAME
+    return Path.home() / ".local" / "share" / HOME_FOLDER_NAME
 
 
 def prepare_home(home: Path) -> None:

@@ -31,12 +31,30 @@ def test_prepare_home_never_overwrites_existing_files(tmp_path):
     assert json.loads((home / "weather_config.json").read_text())["latitude"] == 35.0
 
 
-def test_default_home_is_under_documents_and_respects_override(tmp_path, monkeypatch):
+def test_default_home_is_local_app_data_not_documents_and_respects_override(
+    tmp_path, monkeypatch
+):
+    local = tmp_path / "AppData" / "Local"
     monkeypatch.delenv(paths.HOME_ENV_VAR, raising=False)
-    assert launcher.default_home() == Path.home() / "Documents" / "体調分析ダッシュボード"
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+
+    home = launcher.default_home()
+
+    assert home == local / "体調分析ダッシュボード"
+    # OneDriveに同期されうる「ドキュメント」「デスクトップ」の下には置かない。
+    assert "Documents" not in home.parts and "OneDrive" not in home.parts
 
     monkeypatch.setenv(paths.HOME_ENV_VAR, str(tmp_path))
     assert launcher.default_home() == tmp_path
+
+
+def test_default_home_without_local_app_data_falls_back_outside_documents(monkeypatch):
+    monkeypatch.delenv(paths.HOME_ENV_VAR, raising=False)
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+
+    home = launcher.default_home()
+
+    assert home == Path.home() / ".local" / "share" / "体調分析ダッシュボード"
 
 
 def _occupy_port():
@@ -76,7 +94,7 @@ def test_streamlit_command_is_local_only_and_disables_telemetry():
     command = launcher.build_streamlit_command(Path("/app/app.py"), 8800)
 
     assert command[:4] == [sys.executable, "-m", "streamlit", "run"]
-    assert "/app/app.py" in command[4]
+    assert Path(command[4]) == Path("/app/app.py")  # Windowsでは区切りが \\ になる
     options = dict(zip(command[5::2], command[6::2], strict=True))
     assert options["--server.address"] == "127.0.0.1"
     assert options["--server.port"] == "8800"
