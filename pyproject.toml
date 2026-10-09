@@ -1,6 +1,6 @@
 [project]
 name = "it-school-health-manager"
-version = "0.1.0"
+version = "0.2.0"
 description = "就労移行支援向け 体調・睡眠分析ダッシュボード"
 requires-python = ">=3.11"
 
