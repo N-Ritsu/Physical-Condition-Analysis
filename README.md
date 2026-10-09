@@ -133,8 +133,24 @@ ruff check .
 
 - ダブルクリックすると、画面（黒いウィンドウ）を出さずにダッシュボードを起動し、ブラウザで開く。すでに起動していれば、2つ目は起動せずブラウザだけ開く（既定のポートは8765）。
 - 自分のPC内だけ（127.0.0.1）で待ち受け、利用状況の自動送信（テレメトリ）とエラーの詳細表示を止める。ツールバー（Deployボタン）も出さない。
-- データ・設定の置き場所は、ドキュメント内の「体調分析ダッシュボード」フォルダ（`data/`、`weather_config.json`、`logs/`）。初回起動時に自動で作る。環境変数 `HEALTH_DASHBOARD_HOME` で別の場所にも変えられる。アプリ本体を入れ替えても、データと設定は消えない。ソースから `streamlit run app.py` で実行した場合は、従来どおりリポジトリ直下の `data/` を使う。
+- データ・設定の置き場所は、`%LOCALAPPDATA%\体調分析ダッシュボード`（`C:\Users\<ユーザー名>\AppData\Local\体調分析ダッシュボード`。`data/`、`weather_config.json`、`logs/`）。初回起動時に自動で作る。環境変数 `HEALTH_DASHBOARD_HOME` で別の場所にも変えられる。アプリ本体を入れ替えても、データと設定は消えない。ソースから `streamlit run app.py` で実行した場合は、従来どおりリポジトリ直下の `data/` を使う。
 - この起動から開いたときだけ、サイドバーに「アプリを終了する」ボタンが出る。押すとサーバーが止まる。
 - 起動に失敗したときは、メッセージ画面で知らせ、ログを `logs/launcher.log` に残す。
-- `体調分析を起動.bat` は、同梱のPython（`python` フォルダ）があればそれを、無ければPCにインストールされたPython（`pythonw`）を使う。Pythonを同梱した配布用パッケージの作成は、今後の作業。
+- `体調分析を起動.bat` は、同梱のPython（`python` フォルダ）があればそれを、無ければPCにインストールされたPython（`pythonw`）を使う。配布用のzip（Python同梱）の作り方は、次の「配布用zipの作成」を参照。
+
+## 配布用zipの作成（Python同梱）
+
+支援員のPCにPythonを入れなくても動かせるよう、Pythonとライブラリを同梱したzipを作る。Windowsで、次を実行する（[build_windows.ps1](packaging/build_windows.ps1)）。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
+```
+
+できあがる `dist/体調分析ダッシュボード-<バージョン>.zip` を、支援員のPCに渡す（`dist/` はgit管理の対象外）。zipを展開し、中の「体調分析を起動.bat」をダブルクリックすれば起動する。
+
+- 同梱するもの: python.org の embeddable 版Python（既定は3.12.10）、`requirements-lock.txt` に固定したライブラリ、アプリ本体（app.py・src・起動用ファイル）、使い方（使い方.txt）。展開後は約500MB、zipは約160MB。
+- 含めないもの: 利用者のデータ、`weather_config.json`、`.git`、テスト、docs。ビルドの途中で、xlsx・csv・weather_config.json・data・logsなどが混ざっていないことを確認し、混ざっていれば失敗にする。データと設定は、アプリの初回起動時に `%LOCALAPPDATA%\体調分析ダッシュボード` へ作られるため、アプリ本体を入れ替えても消えない。
+- 同梱のPythonは、そのPCにインストールされたPythonやユーザー用ライブラリを使わない（`python312._pth` に `import site` を書かない）。PCごとに動きが変わる／同梱し忘れたライブラリがPC側のもので補われてしまうのを防ぐため。ビルドの最後に、検索パスがすべて同梱フォルダの中であることを確認する。
+- ライブラリの版: `requirements-lock.txt` に、配布版のPythonで全テストが通った版を固定している。更新するときは、`requirements.txt` の指定で新しい版を取得して配布版のPythonで全テストを通してから、固定ファイルを差し替える（開発用の環境と配布版でpandasなどの版が違うことがあり、`None` と `NaN` の違いのように、版で動きが変わる箇所がある）。
+- 動作確認: 展開したzipの同梱Pythonだけで全テスト（画面操作の通しテストを含む）が通ることと、PATHからPythonを外した状態でダブルクリック起動できること（約4秒）、終了ボタンで同梱Pythonのプロセスが全て終わることを確認した。何もインストールされていない別のPCや、ウイルス対策ソフトのある環境での確認は、まだ行っていない。
 
