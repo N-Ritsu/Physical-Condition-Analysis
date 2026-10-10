@@ -22,6 +22,8 @@ from collections.abc import Callable
 IDLE_GRACE_SECONDS = 120
 GRACE_ENV_VAR = "HEALTH_DASHBOARD_IDLE_GRACE"
 POLL_INTERVAL_SECONDS = 5
+# サーバーの起動（Streamlitの準備）を待つ上限。これを過ぎたら、自動終了は諦める。
+READY_TIMEOUT_SECONDS = 600
 # 監視の間隔がこの倍数より空いたら、スリープなどで止まっていたとみなす。
 _SUSPEND_FACTOR = 3
 
@@ -79,15 +81,17 @@ def start_idle_watcher(
     count_sessions: Callable[[], int | None] = active_session_count,
     grace_seconds: float = IDLE_GRACE_SECONDS,
     poll_seconds: float = POLL_INTERVAL_SECONDS,
-) -> bool:
-    """ブラウザの接続を監視するスレッドを始める。接続数が取れない環境では始めずFalse。"""
-    if count_sessions() is None:
-        return False
+    ready_timeout_seconds: float = READY_TIMEOUT_SECONDS,
+) -> None:
+    """ブラウザの接続を監視するスレッドを始める（サーバーの起動時に呼ぶ）。
+
+    ブラウザが一度も接続しなくても、猶予を過ぎれば終了する。接続数が取れる状態に
+    ならなければ（ready_timeout_seconds以内）、自動終了は行わない。
+    """
     try:  # 動作確認用に、猶予時間（秒）を環境変数で変えられる
         grace_seconds = float(os.environ.get(GRACE_ENV_VAR, grace_seconds))
     except ValueError:
         pass
-    monitor = IdleMonitor(count_sessions, grace_seconds, poll_seconds)
     if on_idle is None:
 
         def on_idle() -> None:
@@ -96,6 +100,14 @@ def start_idle_watcher(
             os._exit(0)
 
     def watch() -> None:
+        # サーバーの準備ができる（接続数が取れるようになる）まで待ってから、監視を始める。
+        # 最初の画面が描画される前にブラウザが閉じられても、終了できるようにするため。
+        deadline = time.monotonic() + ready_timeout_seconds
+        while count_sessions() is None:
+            if time.monotonic() > deadline:
+                return  # 接続数が取れない環境。自動終了は行わない。
+            time.sleep(min(1.0, poll_seconds))
+        monitor = IdleMonitor(count_sessions, grace_seconds, poll_seconds)
         while True:
             time.sleep(poll_seconds)
             if monitor.should_exit():
@@ -103,4 +115,3 @@ def start_idle_watcher(
                 return
 
     threading.Thread(target=watch, name="idle-shutdown", daemon=True).start()
-    return True

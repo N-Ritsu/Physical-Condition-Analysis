@@ -93,19 +93,40 @@ def test_active_session_count_is_none_outside_streamlit_server():
     assert active_session_count() is None
 
 
-def test_watcher_is_not_started_when_sessions_cannot_be_counted():
-    assert start_idle_watcher(on_idle=lambda: None, count_sessions=lambda: None) is False
+def test_watcher_never_exits_when_sessions_cannot_be_counted():
+    called = threading.Event()
+
+    start_idle_watcher(
+        on_idle=called.set,
+        count_sessions=lambda: None,
+        grace_seconds=0,
+        poll_seconds=0.01,
+        ready_timeout_seconds=0.2,
+    )
+
+    assert not called.wait(timeout=0.6)
 
 
 def test_watcher_thread_calls_on_idle_when_no_browser(monkeypatch):
     monkeypatch.setenv(GRACE_ENV_VAR, "0")
     called = threading.Event()
 
-    started = start_idle_watcher(
-        on_idle=called.set, count_sessions=lambda: 0, poll_seconds=0.01
-    )
+    # ブラウザが一度も接続しなかった場合（接続数が最初から0）も終了する
+    start_idle_watcher(on_idle=called.set, count_sessions=lambda: 0, poll_seconds=0.01)
 
-    assert started is True
+    assert called.wait(timeout=5)
+
+
+def test_watcher_waits_for_server_to_become_ready_then_monitors(monkeypatch):
+    monkeypatch.setenv(GRACE_ENV_VAR, "0")
+    called = threading.Event()
+    answers = iter([None, None, None])
+
+    def count():
+        return next(answers, 0)  # 最初の数回は「サーバーの準備中」、その後は接続0
+
+    start_idle_watcher(on_idle=called.set, count_sessions=count, poll_seconds=0.01)
+
     assert called.wait(timeout=5)
 
 

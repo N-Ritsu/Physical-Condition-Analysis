@@ -93,14 +93,80 @@ def test_is_dashboard_running_false_when_nothing_listens():
 def test_streamlit_command_is_local_only_and_disables_telemetry():
     command = launcher.build_streamlit_command(Path("/app/app.py"), 8800)
 
-    assert command[:4] == [sys.executable, "-m", "streamlit", "run"]
-    assert Path(command[4]) == Path("/app/app.py")  # Windowsでは区切りが \\ になる
-    options = dict(zip(command[5::2], command[6::2], strict=True))
+    assert command[0] == sys.executable
+    # 自動終了の監視つきで streamlit run を実行する入口（app.py と同じフォルダ）
+    assert Path(command[1]) == Path("/app/run_server.py")  # Windowsでは区切りが \\ になる
+    assert command[2] == "run"
+    assert Path(command[3]) == Path("/app/app.py")
+    options = dict(zip(command[4::2], command[5::2], strict=True))
     assert options["--server.address"] == "127.0.0.1"
     assert options["--server.port"] == "8800"
     assert options["--server.headless"] == "true"
     assert options["--browser.gatherUsageStats"] == "false"
     assert options["--client.showErrorDetails"] == "none"
+
+
+def test_loading_page_polls_the_app_port_and_switches_automatically(tmp_path):
+    page = launcher.write_loading_page(tmp_path, 8791)
+
+    html = page.read_text(encoding="utf-8")
+
+    assert page.name == "loading.html"
+    assert '"http://127.0.0.1:8791/"' in html  # 切り替え先
+    assert "favicon.png" in html  # 準備ができたかの確認に使う
+    assert "__PORT__" not in html
+    assert "起動しています" in html
+
+
+def test_loading_page_is_not_opened_when_browser_is_disabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("HEALTH_DASHBOARD_NO_BROWSER", "1")
+    opened = []
+    monkeypatch.setattr(launcher.webbrowser, "open", lambda url: opened.append(url) or True)
+
+    assert launcher.open_loading_page(tmp_path, 8791) is True
+    assert opened == []
+
+
+def test_loading_page_opens_as_a_file_url(tmp_path, monkeypatch):
+    monkeypatch.delenv("HEALTH_DASHBOARD_NO_BROWSER", raising=False)
+    opened = []
+    monkeypatch.setattr(launcher.webbrowser, "open", lambda url: opened.append(url) or True)
+
+    assert launcher.open_loading_page(tmp_path, 8791) is True
+    assert opened == [(tmp_path / "loading.html").as_uri()]
+
+
+def test_loading_page_failure_falls_back(tmp_path, monkeypatch):
+    monkeypatch.delenv("HEALTH_DASHBOARD_NO_BROWSER", raising=False)
+
+    def fail(_url):
+        raise OSError("no browser")
+
+    monkeypatch.setattr(launcher.webbrowser, "open", fail)
+
+    assert launcher.open_loading_page(tmp_path, 8791) is False
+
+
+def test_wait_if_starting_returns_false_when_port_is_free(monkeypatch):
+    monkeypatch.setattr(launcher, "is_port_free", lambda port: True)
+
+    assert launcher.wait_if_starting(8791, timeout=0.2) is False
+
+
+def test_wait_if_starting_waits_for_a_starting_dashboard(monkeypatch):
+    answers = iter([False, False, True])
+    monkeypatch.setattr(launcher, "is_port_free", lambda port: False)
+    monkeypatch.setattr(launcher, "is_dashboard_running", lambda port: next(answers))
+    monkeypatch.setattr(launcher.time, "sleep", lambda seconds: None)
+
+    assert launcher.wait_if_starting(8791, timeout=5) is True
+
+
+def test_wait_if_starting_gives_up_for_another_program_on_the_port(monkeypatch):
+    monkeypatch.setattr(launcher, "is_port_free", lambda port: False)
+    monkeypatch.setattr(launcher, "is_dashboard_running", lambda port: False)
+
+    assert launcher.wait_if_starting(8791, timeout=0.2) is False
 
 
 def test_paths_follow_home_override(tmp_path, monkeypatch):

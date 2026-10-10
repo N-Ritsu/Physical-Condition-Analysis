@@ -79,7 +79,7 @@ if ($LASTEXITCODE -ne 0) { throw "ライブラリの取得に失敗しました"
 
 # ---- 3. アプリ本体 ----
 Step "アプリ本体をコピーする"
-foreach ($name in @("app.py", "run_dashboard.py", "requirements.txt", "LICENSE")) {
+foreach ($name in @("app.py", "run_dashboard.py", "run_server.py", "requirements.txt", "LICENSE")) {
     Copy-Item -LiteralPath (Join-Path $repo $name) -Destination $stage
 }
 Copy-Item -Path (Join-Path $repo "*.bat") -Destination $stage

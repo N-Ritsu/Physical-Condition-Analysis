@@ -28,7 +28,7 @@ APP_TITLE = "体調・睡眠分析ダッシュボード"
 HOME_FOLDER_NAME = "体調分析ダッシュボード"
 DEFAULT_PORT = 8765
 PORT_TRIES = 20
-STARTUP_TIMEOUT_SECONDS = 90
+STARTUP_TIMEOUT_SECONDS = 180  # 初回の、ウイルス対策ソフトの検査で遅くなるPCも想定
 # 初期状態の設定ファイル（緯度・経度が null の間は、気象データを使わず通信もしない）。
 WEATHER_CONFIG_TEMPLATE = {"latitude": None, "longitude": None}
 SHORTCUT_NAME = "体調分析ダッシュボード.lnk"
@@ -170,10 +170,10 @@ def is_dashboard_running(port: int) -> bool:
 
 def build_streamlit_command(app_path: Path, port: int) -> list[str]:
     """支援員向けの設定で Streamlit を起動するコマンド。"""
+    # run_server.py は、`streamlit run` を、ブラウザが閉じたら自動終了する監視つきで実行する。
     return [
         sys.executable,
-        "-m",
-        "streamlit",
+        str(app_path.parent / "run_server.py"),
         "run",
         str(app_path),
         "--server.address",
@@ -220,7 +220,7 @@ def main(app_path: Path, create_shortcut_if_missing: bool = False) -> int:
     log_path = home / "logs" / "launcher.log"
 
     port = DEFAULT_PORT
-    if is_dashboard_running(port):
+    if is_dashboard_running(port) or wait_if_starting(port):
         open_browser(port)
         return 0
     free = find_free_port(port)
@@ -238,6 +238,9 @@ def main(app_path: Path, create_shortcut_if_missing: bool = False) -> int:
             stderr=subprocess.STDOUT,
             creationflags=creationflags,
         )
+        # アプリの準備ができるまでの間、真っ白な画面（または接続エラー）を見せないよう、
+        # 「起動しています」の待機ページを先に開く。準備ができると、自動で本画面に切り替わる。
+        loading_opened = open_loading_page(home, free)
         if not wait_until_running(free, process, STARTUP_TIMEOUT_SECONDS):
             process.terminate()
             show_error(
@@ -245,9 +248,87 @@ def main(app_path: Path, create_shortcut_if_missing: bool = False) -> int:
                 f"詳細は次のファイルに記録されています。\n{log_path}"
             )
             return 1
-        open_browser(free)
+        if not loading_opened:
+            open_browser(free)
         make_desktop_shortcut(app_path.parent, home, create_shortcut_if_missing)
         return process.wait()
+
+
+def wait_if_starting(port: int, timeout: float = 60.0) -> bool:
+    """そのポートを別の起動処理が使い始めている（準備中）なら、準備ができるまで待つ。
+
+    ダブルクリックを続けて2回した場合に、2つ目のサーバーを別のポートで起動してしまわないため。
+    別のアプリがポートを使っているだけなら、timeoutまで待ってFalseを返す。
+    """
+    if is_port_free(port):
+        return False
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if is_dashboard_running(port):
+            return True
+        time.sleep(0.5)
+    return False
+
+
+_LOADING_PAGE = """<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>起動しています - 体調・睡眠分析ダッシュボード</title>
+<style>
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center;
+         justify-content: center; background: #f6f8f8; color: #26373a;
+         font-family: "Yu Gothic UI", "Meiryo", sans-serif; }
+  main { text-align: center; padding: 24px; }
+  .spinner { width: 48px; height: 48px; margin: 0 auto 24px; border-radius: 50%;
+             border: 5px solid #cfe3e1; border-top-color: #2f8f83;
+             animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  h1 { font-size: 22px; margin: 0 0 12px; }
+  p { margin: 6px 0; line-height: 1.7; }
+  #slow { margin-top: 24px; color: #8a5a00; }
+</style>
+</head>
+<body>
+<main>
+  <div class="spinner"></div>
+  <h1>体調・睡眠分析ダッシュボードを起動しています</h1>
+  <p>準備ができると、自動で画面が切り替わります。</p>
+  <p>初回は30秒ほどかかることがあります。このままお待ちください。</p>
+  <p id="slow" hidden>時間がかかっています。切り替わらないときは、
+    <a id="link" href="http://127.0.0.1:__PORT__/">こちら</a>を押してください。</p>
+</main>
+<script>
+  var base = "http://127.0.0.1:__PORT__/";
+  function check() {
+    var image = new Image();
+    image.onload = function () { location.replace(base); };
+    image.onerror = function () { setTimeout(check, 1000); };
+    image.src = base + "favicon.png?t=" + Date.now();
+  }
+  check();
+  setTimeout(function () { document.getElementById("slow").hidden = false; }, 60000);
+</script>
+</body>
+</html>
+"""
+
+
+def write_loading_page(home: Path, port: int) -> Path:
+    """待機ページ（アプリの準備ができたら本画面へ自動で切り替わるHTML）を書き出す。"""
+    page = home / "loading.html"
+    page.write_text(_LOADING_PAGE.replace("__PORT__", str(port)), encoding="utf-8")
+    return page
+
+
+def open_loading_page(home: Path, port: int) -> bool:
+    """待機ページをブラウザで開く。開けたらTrue（開けなければ、準備後に本画面を直接開く）。"""
+    if os.environ.get("HEALTH_DASHBOARD_NO_BROWSER") == "1":
+        return True
+    try:
+        return bool(webbrowser.open(write_loading_page(home, port).as_uri()))
+    except Exception:  # noqa: BLE001 - 開けなくても、準備後に本画面を直接開けばよい
+        return False
 
 
 def make_desktop_shortcut(app_dir: Path, home: Path, recreate_if_missing: bool = False) -> None:
