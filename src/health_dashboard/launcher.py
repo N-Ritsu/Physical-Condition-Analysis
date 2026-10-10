@@ -19,6 +19,7 @@ import time
 import urllib.error
 import urllib.request
 import webbrowser
+from collections.abc import Callable
 from pathlib import Path
 
 from health_dashboard.paths import HOME_ENV_VAR, LAUNCHER_ENV_VAR
@@ -30,6 +31,10 @@ PORT_TRIES = 20
 STARTUP_TIMEOUT_SECONDS = 90
 # 初期状態の設定ファイル（緯度・経度が null の間は、気象データを使わず通信もしない）。
 WEATHER_CONFIG_TEMPLATE = {"latitude": None, "longitude": None}
+SHORTCUT_NAME = "体調分析ダッシュボード.lnk"
+SHORTCUT_MARKER_NAME = ".desktop_shortcut"
+DESKTOP_ENV_VAR = "HEALTH_DASHBOARD_DESKTOP"  # デスクトップの場所の上書き（動作確認用）
+NO_SHORTCUT_ENV_VAR = "HEALTH_DASHBOARD_NO_SHORTCUT"  # 1ならショートカットを作らない
 
 
 def default_home() -> Path:
@@ -56,6 +61,86 @@ def prepare_home(home: Path) -> None:
         config.write_text(
             json.dumps(WEATHER_CONFIG_TEMPLATE, indent=2) + "\n", encoding="utf-8"
         )
+
+
+def desktop_dir() -> Path | None:
+    """実際のデスクトップのフォルダ（OneDriveに移されていれば、その場所）。取れなければNone。"""
+    if os.environ.get(DESKTOP_ENV_VAR):
+        return Path(os.environ[DESKTOP_ENV_VAR])
+    if sys.platform != "win32":
+        return None
+    import ctypes
+
+    buffer = ctypes.create_unicode_buffer(1024)
+    # 0x0010 = CSIDL_DESKTOPDIRECTORY（Windowsが管理する、実際のデスクトップの場所）
+    if ctypes.windll.shell32.SHGetFolderPathW(None, 0x0010, None, 0, buffer) != 0:
+        return None
+    return Path(buffer.value)
+
+
+_SHORTCUT_SCRIPT = (
+    "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:HD_LNK); "
+    "$s.TargetPath = $env:HD_TARGET; $s.Arguments = $env:HD_ARGS; "
+    "$s.WorkingDirectory = $env:HD_WORKDIR; $s.IconLocation = $env:HD_ICON + ',0'; "
+    "$s.Description = $env:HD_DESCRIPTION; $s.Save()"
+)
+
+
+def create_shortcut(lnk: Path, target: Path, arguments: str, workdir: Path, icon: Path) -> bool:
+    """Windowsのショートカット（.lnk）を作る。成功ならTrue。"""
+    env = {
+        **os.environ,
+        "HD_LNK": str(lnk),
+        "HD_TARGET": str(target),
+        "HD_ARGS": arguments,
+        "HD_WORKDIR": str(workdir),
+        "HD_ICON": str(icon),
+        "HD_DESCRIPTION": APP_TITLE,
+    }
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", _SHORTCUT_SCRIPT],
+        env=env,
+        capture_output=True,
+        timeout=60,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return result.returncode == 0 and lnk.exists()
+
+
+def ensure_desktop_shortcut(
+    app_dir: Path,
+    home: Path,
+    desktop: Path | None = None,
+    creator: Callable[..., bool] = create_shortcut,
+    recreate_if_missing: bool = False,
+) -> bool:
+    """デスクトップに、アプリを開くショートカットを作る（作った・更新したときTrue）。
+
+    - 同梱のPython（app_dir/python/pythonw.exe）があるときだけ作る（開発中は作らない）。
+    - どのフォルダのアプリを指しているかを、home の記録ファイルに残す。アプリを別の場所に
+      置き直した・新しい版に入れ替えたときは、ショートカットの指す先を更新する。
+    - 利用者がショートカットを消した場合は、作り直さない（記録だけが残っている状態）。
+      ただし、recreate_if_missing（「体調分析を起動.bat」から起動したとき）は、作り直す。
+    """
+    target = app_dir / "python" / "pythonw.exe"
+    icon = app_dir / "app.ico"
+    desktop = desktop or desktop_dir()
+    if desktop is None or not desktop.is_dir() or not target.is_file():
+        return False
+
+    lnk = desktop / SHORTCUT_NAME
+    marker = home / SHORTCUT_MARKER_NAME
+    recorded = marker.read_text(encoding="utf-8").strip() if marker.is_file() else None
+    if lnk.exists():
+        if recorded == str(app_dir):
+            return False
+    elif recorded is not None and not recreate_if_missing:
+        return False
+
+    if not creator(lnk, target, "run_dashboard.py", app_dir, icon):
+        return False
+    marker.write_text(str(app_dir), encoding="utf-8")
+    return True
 
 
 def is_port_free(port: int) -> bool:
@@ -129,7 +214,7 @@ def wait_until_running(port: int, process: subprocess.Popen, timeout: float) -> 
     return False
 
 
-def main(app_path: Path) -> int:
+def main(app_path: Path, create_shortcut_if_missing: bool = False) -> int:
     home = default_home()
     prepare_home(home)
     log_path = home / "logs" / "launcher.log"
@@ -161,7 +246,18 @@ def main(app_path: Path) -> int:
             )
             return 1
         open_browser(free)
+        make_desktop_shortcut(app_path.parent, home, create_shortcut_if_missing)
         return process.wait()
+
+
+def make_desktop_shortcut(app_dir: Path, home: Path, recreate_if_missing: bool = False) -> None:
+    """デスクトップのショートカットを用意する。失敗しても、アプリの起動には影響させない。"""
+    if sys.platform != "win32" or os.environ.get(NO_SHORTCUT_ENV_VAR) == "1":
+        return
+    try:
+        ensure_desktop_shortcut(app_dir, home, recreate_if_missing=recreate_if_missing)
+    except Exception:  # noqa: BLE001 - ショートカットは便利機能なので、失敗しても無視する
+        pass
 
 
 def open_browser(port: int) -> None:

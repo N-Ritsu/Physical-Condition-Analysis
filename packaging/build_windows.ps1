@@ -83,6 +83,8 @@ foreach ($name in @("app.py", "run_dashboard.py", "requirements.txt", "LICENSE")
     Copy-Item -LiteralPath (Join-Path $repo $name) -Destination $stage
 }
 Copy-Item -Path (Join-Path $repo "*.bat") -Destination $stage
+# デスクトップのショートカットに使うアイコン（アプリが初回起動時にショートカットを作る）
+Copy-Item -LiteralPath (Join-Path $repo "assets\app.ico") -Destination $stage
 Copy-Item -LiteralPath (Join-Path $repo ".streamlit") -Destination $stage -Recurse
 Copy-Item -LiteralPath (Join-Path $repo "src") -Destination $stage -Recurse
 Copy-Item -LiteralPath (Join-Path $repo "staff_operation_guide.md") -Destination (Join-Path $stage "使い方.txt")
